@@ -12,16 +12,17 @@
 #
 # UTIL_VERSION: Build version, such as "v0.1"
 #
-
-#OBJECT=windows
-OBJECT = linux
+CC=/mingw/bin/gcc
+RC=/mingw/bin/windres
+OBJECT=windows
+#OBJECT = linux
 UTIL_VERSION = v0.1
 
 
 ifeq ($(OBJECT),windows) 
     # compile flag and link flag definitions
     CFLAGS  = -DFT_WINDOW -DNT_WINDOW -O2 -I ./include -DSF_VERSION=\"$(UTIL_VERSION)\"
-    LDFLAGS = -lcomctl32 -lsetupapi -lWs2_32
+    LDFLAGS = -lcomctl32 -lsetupapi -lWs2_32 -lshlwapi
 
 endif
 
@@ -75,8 +76,10 @@ LINUX_TOOLS  += linux_bb_recover_$(UTIL_VERSION)
 
 #add source files for windows tool here
 WINDOWS_TOOLS= windows_client_$(UTIL_VERSION).exe
+WINDOWS_GUI_TOOLS=NandflashRecoveryTool_$(UTIL_VERSION).exe
 WIN_LIB_NET= libnetwork.dll
 Win_OBJ= windows/windows_client.o 
+WIN_GUI_OBJ=windows/NandflashRecoveryTool.o windows/NandRecoveryToolrc.o
 WIN_LIB_NET_OBJS= ./lib/network_library.o
 #WINDOWS_OBJ+= windows_tool_obj
 
@@ -86,7 +89,7 @@ ifeq ($(OBJECT),linux)
 
 else
 
-    all: clean windows_tool_obj win_lib_net_obj $(WIN_LIB_NET) $(WINDOWS_TOOLS) install
+    all: clean windows_tool_obj win_lib_net_obj $(WIN_LIB_NET) $(WINDOWS_TOOLS) $(WINDOWS_GUI_TOOLS) install
 
 endif
 
@@ -113,11 +116,19 @@ $(WIN_LIB_NET):
 $(WINDOWS_TOOLS):
 	$(CC) $(Win_OBJ) $(LDFLAGS) -L ./lib -lnetwork -lupgrade -o  $(WINDOWS_TOOLS) 
 
+$(WINDOWS_GUI_TOOLS):
+	$(CC) $(WIN_GUI_OBJ) $(LDFLAGS) -mwindows -L ./lib -lnetwork -lupgrade -o $(WINDOWS_GUI_TOOLS)
 
 
-windows_tool_obj: windows/windows_client.o 
+
+windows_tool_obj: $(Win_OBJ) $(WIN_GUI_OBJ)
 win_lib_net_obj: ./lib/network_library.o
 
+windows/NandflashRecoveryTool.o:windows/NandRecoveryTool.c ./include/*.h
+	$(CC) -c -o $@ $< $(CFLAGS)
+windows/NandRecoveryToolrc.o:./windows/NandRecoveryTool.rc ./include/NandRecoveryTool.h
+	$(RC) -o  $@ $< -I./include
+	
 %.o: %.c ./include/* ./include/mtd/* ./lib/* ./tools/* ./windows/*
 
 install:
@@ -125,7 +136,7 @@ install:
 ifeq ($(OBJECT),linux) 
 	mv $(LINUX_TOOLS) ./output
 else
-	mv $(WINDOWS_TOOLS) ./lib/$(WIN_LIB_NET) ./output
+	mv $(WINDOWS_TOOLS) $(WINDOWS_GUI_TOOLS) ./lib/$(WIN_LIB_NET) ./output
 	cp ./lib/libupgrade.dll ./reset_tg.sh ./output
 endif
 
@@ -133,6 +144,6 @@ clean:
 ifeq ($(OBJECT),linux) 
 	rm -f $(LINUX_TOOLS) *.o ./lib/*.o ./tools/*.o
 else
-	rm -f $(WINDOWS_TOOLS) *.o ./lib/*.o ./windows/*.o ./lib/$(WIN_LIB_NET) 
+	rm -f $(WINDOWS_TOOLS)  $(WINDOWS_GUI_TOOLS) *.o ./lib/*.o ./windows/*.o ./lib/$(WIN_LIB_NET) 
 endif
 

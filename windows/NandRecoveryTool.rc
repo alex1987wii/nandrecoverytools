@@ -1,0 +1,5 @@
+
+#include "NandRecoveryTool.h"
+
+IDI_ICON    ICON    DISCARDABLE    "NandRecoveryTool.ico"
+
