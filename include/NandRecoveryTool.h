@@ -13,10 +13,17 @@ typedef struct tagLAYOUT{
 	int nHeight;	
 }LAYOUT;
 enum STAGE{
-	S_INIT,
+	S_INIT=0,
+	S_REBOOTING,
+	#warning "don't need any more,remove them when done"
+	S_DOWNLOAD,
+	S_REBOOTED,	
 	S_CONNECTING,
-	S_CONNECTED,	
+	S_CONNECTED,
 	S_SCANING,
-	S_RECOVERING
+	S_SCANED,
+	S_RECOVERING,
+	S_RECOVERED,
+	S_ERROR	
 };
 #endif

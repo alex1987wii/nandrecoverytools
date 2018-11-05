@@ -1,6 +1,7 @@
 #include <windows.h>
 #include <stdlib.h>
 #include <shlwapi.h>
+#include <assert.h>
 #include "NandRecoveryTool.h"
 #include "error_code.h"
 
@@ -9,6 +10,7 @@
 #include "network_library.h"
 #include "UpgradeLib.h"
 
+
 #define NET_PORT 0x8989
 
 #define REBOOT_SHELL    "reset_tg.sh"  /*reboot shell, running in linux device, reboot device into upgrade mode*/
@@ -16,36 +18,51 @@
 #define BB_RECOVER_TOOL      "linux_bb_recover_v0.1"    /*Fake Bad Block recover tool, runing in ARM side*/
 
 
-#define WINDOWS_DEBUG_ENABLE                                       
-
-#ifdef WINDOWS_DEBUG_ENABLE
-    #define WINDOWS_DEBUG(fmt, args...)  printf(fmt, ## args)   
-#else
-    #define WINDOWS_DEBUG(fmt, args...)                         
-#endif
 
 
-
-#define APP_TITLE   "Unication Nandflash Scan&Recovery Tool"
-#define MUTEX_NAME	"Unication Dev Tools"
+#define APP_TITLE   TEXT("Unication Nandflash Scan&Recovery Tool")
+#define MUTEX_NAME	TEXT("Unication Dev Tools")
 
 /* GUI layout */
 #define DEV_TOOLS_WIDTH         700         
 #define DEV_TOOLS_HEIGHT        500 
 
 #define CONTROLLER_NUM			7
-#define MAX_STRING				2048
+#define MAX_STRING				1024
 
-/*USER message definition */
-#define WM_INIT			(WM_USER)
-#define WM_CONNECT		(WM_USER+1)
-#define WM_CTLDISABLE	(WM_USER+2)
-#define WM_CTLENABLE	(WM_USER+3)
+
+#warning "debug info,need remove when release!"
+#define WINDOWS_DEBUG_ENABLE                                     
+
+#ifdef WINDOWS_DEBUG_ENABLE	 
+    #define WINDOWS_DEBUG(fmt, args...)  ({snprintf(MessageBoxBuff,MAX_STRING,TEXT(fmt),##args);MessageBox(NULL,MessageBoxBuff,TEXT("Debug"),MB_OK);})   
+#else
+    #define WINDOWS_DEBUG(fmt, args...)                         
+#endif
+
+#define POP_MESSAGE(hwnd,message,title,args...)	({snprintf(MessageBoxBuff,MAX_STRING,TEXT(message),##args);MessageBox(hwnd,MessageBoxBuff,TEXT(title),MB_OK);}) 
+
 
 /*use hInfo to append information in lpszInformation,use it carefully when hInfo have been initialized */
-#define AppendInfo(fmt,args...)	({snprintf(lpszInformation+strlen(lpszInformation),MAX_STRING-strlen(lpszInformation),fmt,##args);\
+#define AppendInfo(fmt,args...)		({snprintf(lpszInformation+lstrlen(lpszInformation),MAX_STRING-lstrlen(lpszInformation),TEXT(fmt),##args);\
 SetWindowText(hInfo,lpszInformation);})
-#define ClearInfo	lpszInformation[0]=0
+#define ClearInfo()		lpszInformation[0]=TEXT('\0')
+#define ShowInfo(fmt,args...)		({snprintf(lpszInformation,MAX_STRING,TEXT(fmt),##args);SetWindowText(hInfo,lpszInformation);})
+
+
+/*USER message definition */
+#define WM_INIT				(WM_USER+S_INIT)
+#define WM_REBOOTING		(WM_USER+S_REBOOTING)
+#define WM_DOWNLOAD			(WM_USER+S_DOWNLOAD)
+#define WM_REBOOTED			(WM_USER+S_REBOOTED)
+#define WM_CONNECTING		(WM_USER+S_CONNECTING)
+#define WM_CONNECTED		(WM_USER+S_CONNECTED)
+#define WM_SCANING			(WM_USER+S_SCANING)
+#define WM_SCANED			(WM_USER+S_SCANED)
+#define WM_RECOVERING		(WM_USER+S_RECOVERING)
+#define WM_RECOVERED		(WM_USER+S_RECOVERED)
+#define WM_ERROR			(WM_USER+S_ERROR)
+#define WM_CTLENABLE		(WM_USER+S_ERROR+1)
 
 /* controller layout definition */
 static LAYOUT controllerLayout[CONTROLLER_NUM] = {
@@ -64,13 +81,15 @@ static LAYOUT controllerLayout[CONTROLLER_NUM] = {
 	{NULL,TEXT("static"),APP_TITLE,\
 	WS_CHILD | WS_VISIBLE ,  20, 210,655, 200}
 };
+#define USER_CONTROLLER		((1<<1)|(1<<2)|(1<<4)|(1<<5))
 
-static TCHAR lpszInformation[MAX_STRING] = APP_TITLE; /*for information */      
+static TCHAR lpszInformation[MAX_STRING]; /*for information */
+static TCHAR MessageBoxBuff[MAX_STRING];  /*buffer for messagebox */   
 static HINSTANCE hInst; /*NandRecoveryTool's instance */
 static HWND hwndMain=NULL,hInfo=NULL; /*handle for Main window and information window */
 static HANDLE hMutex; /* handle for mutex */
 static char *szAppName = APP_TITLE;	/*APP title */
-static int stage = S_INIT;	/*NandRecoveryTool's current stat */
+static int stage = -1;	/*NandRecoveryTool's current stat */
 
 static const unsigned char TARGET_IP[]={"10.10.0.12"}; /*target device's ip address */
 extern int g_socket_to_server;
@@ -84,6 +103,9 @@ static int rootfs_checked=0;	/*stand for rootfs option is checked? */
 static int userdata_checked=0;	/*stand for userdata option is checked? */
 static int rootfs_recovered=0;	/*stand for rootfs option is recovered? */
 static int userdata_recovered=0;	/*stand for userdata option is recovered? */
+
+/*function declaration */
+LRESULT CALLBACK WndProc(HWND hwnd,UINT message,WPARAM wParam,LPARAM lParam);
 
 /*errcode map, use for translate error code to error information */
 const char *errcode_map[]={
@@ -157,44 +179,6 @@ static inline const char *errcode2_string(int errcode){
 	else
 		return unkown_error;
 }
-/*reset target*/
-static int reset_tg()
-{
-    char  j, retval;
-    printf( "TRYING TO REBOOT TARGET...\n" );
-
-    /*Initialize net */   
-    WSADATA wsaData;
-    retval = WSAStartup(MAKEWORD(1, 1), &wsaData);
-    if (retval != 0)
-    {
-      printf("%s_%d: WSAStartup() error, error code is %d\n", __FILE__, __LINE__, WSAGetLastError());
-      goto END;
-    }
-
-    WINDOWS_DEBUG("Before download \n");
-
-    /*Try 3 times...*/
-    for (j = 0;j < 3;j++)
-    {
-        retval = file_download(REBOOT_SHELL, "/tmp/reset_tg.sh");
-        WINDOWS_DEBUG("Download result = %x\n",retval);
-        if( 0 == retval ) 
-        {
-            printf("Download %s success.\n", REBOOT_SHELL);
-            retval = exec_file_in_tg("/tmp/reset_tg.sh");
-            if( 0 == retval )
-            {
-              printf("Exec %s success!\n", REBOOT_SHELL);
-              break;
-            }
-        }
-    }
-
-END:
-    WSACleanup();
-    return  retval;
-}
 
 /*Downlaod and exec BB_RECOVER_TOOL in target device*/
 static int download_bb_rec_tool()
@@ -235,16 +219,17 @@ END:
     return  retval;
 }
 /*check the files we need if it's exist,if it's not ,quit immediately*/
-static inline void CheckUnitils(void)
+static inline int CheckUnitils(void)
 {	
 	if(!PathFileExists(REBOOT_SHELL)){
 		MessageBox(NULL,REBOOT_SHELL" lost!","Error",MB_ICONERROR);
-		exit(-1);
+		return 1;
 	}
 	if(!PathFileExists(BB_RECOVER_TOOL)){
 		MessageBox(NULL,BB_RECOVER_TOOL" lost!","Error",MB_ICONERROR);
-		exit(-1);
-	}		
+		return 1;
+	}
+	return 0;
 }
 //check u3/u3_2nd device online status
 static int IsDeviceOffLine(void)
@@ -260,11 +245,11 @@ static int IsDeviceOffLine(void)
 	return 1;
 }
 //try to connect u3/u3_2nd device
-DWORD WINAPI ConnectDevice(LPVOID lpParameter)
+/* DWORD WINAPI ConnectDevice(LPVOID lpParameter)
 {
 	int retval=0;
 	stage = S_CONNECTING;
-	ClearInfo;
+	ClearInfo();
 	AppendInfo("Try to reboot device..\n");
 	retval = reset_tg();
 	if(retval != 0){
@@ -297,7 +282,7 @@ DWORD WINAPI ConnectDevice(LPVOID lpParameter)
 		}
 	}	
 	return (DWORD)retval;
-}
+} */
 //scan device partition
 DWORD WINAPI ScanDevice(LPVOID lpParameter)
 {
@@ -306,10 +291,10 @@ DWORD WINAPI ScanDevice(LPVOID lpParameter)
 		MessageBox(hwndMain,"Stage error!","error",MB_ICONERROR);
 		exit(-1);
 	}	
-	PostMessage(hwndMain,WM_CTLDISABLE,0,0);
+	PostMessage(hwndMain,WM_ENABLE,0,0);
 	stage = S_SCANING;
 	/*do the scan job */
-	ClearInfo;
+	ClearInfo();
 	if(rootfs_checked != 1 && userdata_checked !=1){
 		AppendInfo("No partition selected.\n");
 		goto Exit;
@@ -386,10 +371,10 @@ DWORD WINAPI RecoverDevice(LPVOID lpParameter)
 		MessageBox(hwndMain,"Stage error!","error",MB_ICONERROR);
 		exit(-1);
 	}
-	PostMessage(hwndMain,WM_CTLDISABLE,0,0);
+	PostMessage(hwndMain,WM_ENABLE,0,0);
 	stage = S_RECOVERING;
 	/*do the recover job */
-	ClearInfo;
+	ClearInfo();
 	if(rootfs_checked != 1 && userdata_checked !=1){
 		AppendInfo("No partition selected.\n");
 		goto Exit;
@@ -521,141 +506,6 @@ Exit:
 	return (DWORD)retval;
 }
 
-//callback function for main window
-LRESULT CALLBACK WndProc(HWND hwnd,UINT message,WPARAM wParam,LPARAM lParam)
-{
-	PAINTSTRUCT ps;
-	HDC hdc;	
-	switch(message){
-		case WM_CREATE:
-		/*create the controller */
-		{
-			int i;
-			for(i = 0; i < CONTROLLER_NUM; ++i){
-				controllerLayout[i].hwnd = CreateWindow (controllerLayout[i].lpszType,controllerLayout[i].lpszString,
-                         controllerLayout[i].dwStyle,controllerLayout[i].x,controllerLayout[i].y,
-						 controllerLayout[i].nWidth,controllerLayout[i].nHeight,
-                         hwnd, (HMENU)i,
-                         hInst, NULL);
-				if( NULL == controllerLayout[i].hwnd){
-					MessageBox(NULL,"Controller create error","Error",MB_ICONERROR);
-					exit(-1);
-				}
-			}
-			hInfo = controllerLayout[6].hwnd;
-		}
-		command= (struct Network_command *)malloc(sizeof(struct Network_command));
-		if(command == NULL){
-			MessageBox(NULL,"Memery alloc failed!","Error",MB_ICONERROR);
-			exit(-1);
-		}
-		break;
-		case WM_COMMAND:
-		{
-			WORD childId = LOWORD(wParam);
-			WORD notify = HIWORD(wParam);
-			if(notify == BN_CLICKED){				
-				switch(childId){
-					//rootfs checked
-					case 1:rootfs_checked = rootfs_checked == 1 ? 0 : 1;
-					break;
-					//userdata checked
-					case 2:userdata_checked = userdata_checked == 1 ? 0 : 1;
-					break;
-					//scan button click
-					case 4:				
-					CreateThread(NULL,0,ScanDevice,NULL,0,NULL);					
-					break;
-					//recover button click
-					case 5:			
-					CreateThread(NULL,0,RecoverDevice,NULL,0,NULL);	
-					break;
-					default:
-					MessageBox(NULL,"Controller message error","Error",MB_ICONERROR);
-					break;
-				}
-			}							
-		}				
-		break;
-		case WM_CLOSE:
-		/*give notice to user that will reboot the device*/
-		if(S_CONNECTED == stage){
-			MessageBox(hwndMain,"Need reboot the device,click to reboot the device.","Notice",MB_OK | MB_ICONEXCLAMATION);
-			memset(command, 0, sizeof(struct Network_command));
-			command->command_id=COMMAND_REBOOT;			
-			windows_send_command(command);
-		}
-		else if(S_SCANING == stage || S_RECOVERING == stage){
-			MessageBox(hwndMain,"Can't quit now!","Warning",MB_OK | MB_ICONWARNING);
-			return 0;
-		}
-		break;
-		
-		case WM_DESTROY:
-		free(command);
-		//Close socket
-		closesocket(g_socket_to_server);  
-		//terminated DLL  
-		WSACleanup();
-		CloseHandle(hMutex);
-		PostQuitMessage(0);
-		break;
-		case WM_PAINT:
-		hdc = BeginPaint(hwnd,&ps);		
-		EndPaint(hwnd,&ps);
-		break;
-		
-		case WM_INIT:		
-		SetWindowText(hInfo,"Connecting..");
-		PostMessage(hwndMain,WM_CTLDISABLE,0,0);
-		PostMessage(hwndMain,WM_CONNECT,0,0);		
-		break;
-		
-		case WM_CONNECT:/*try to connect device */		
-		CreateThread(NULL,0,ConnectDevice,NULL,0,NULL);		
-		break;
-		
-		/*disable user input controller */
-		case WM_CTLDISABLE:
-		EnableWindow(controllerLayout[1].hwnd,0);
-		EnableWindow(controllerLayout[2].hwnd,0);
-		EnableWindow(controllerLayout[4].hwnd,0);
-		EnableWindow(controllerLayout[5].hwnd,0);
-		break;
-		
-		/*enable user input controller */
-		case WM_CTLENABLE:
-		EnableWindow(controllerLayout[1].hwnd,1);
-		EnableWindow(controllerLayout[2].hwnd,1);
-		EnableWindow(controllerLayout[4].hwnd,1);
-		EnableWindow(controllerLayout[5].hwnd,1);
-		break;
-		
-		case WM_DEVICECHANGE:
-		if(stage == S_INIT){
-			/*if device changed and not connected,then try to connect */
-			SendMessage(hwndMain,WM_CONNECT,0,0);
-		}
-		else if(stage != S_CONNECTING && IsDeviceOffLine()){
-			/*if our device removed ,init environment and disable user input controller */
-			SetWindowText(hInfo,"Device removed!\nPlease Reconnect your device!");
-			stage = S_INIT;
-			bb_num_rootfs=-1;
-			bb_num_userdata=-1;
-			recover_bb_num=-1;
-			rootfs_recovered=0;
-			userdata_recovered=0;
-			PostMessage(hwndMain,WM_CTLDISABLE,0,0);
-		}		
-		break;
-		
-		default:
-		break;
-	}
-	return DefWindowProc(hwnd,message,wParam,lParam);
-}
-
-
 //main window entry
 int APIENTRY WinMain(HINSTANCE hInstance,HINSTANCE hPrevInstance,
             LPSTR lpCmdLine,int iCmdShow)
@@ -674,7 +524,8 @@ int APIENTRY WinMain(HINSTANCE hInstance,HINSTANCE hPrevInstance,
 	}
 
 	/*check the files that we need is available? */
-	CheckUnitils();
+	if(CheckUnitils())
+		return 1;
 	
 	hInst = hInstance;
 	screenWidth = GetSystemMetrics(SM_CXSCREEN);
@@ -712,7 +563,7 @@ int APIENTRY WinMain(HINSTANCE hInstance,HINSTANCE hPrevInstance,
     { 
         if (bRet == -1)
         {            
-            MessageBox(NULL, TEXT("GetMessage error"), szAppName, MB_ICONERROR);
+            MessageBox(NULL, TEXT("GetMessage error"), TEXT(szAppName), MB_ICONERROR);
             return -1;
         }
         else
@@ -724,6 +575,313 @@ int APIENTRY WinMain(HINSTANCE hInstance,HINSTANCE hPrevInstance,
     return msg.wParam;
 }
 
+DWORD WINAPI RebootTarget(LPVOID lpParameter)
+{
+	char  j, retval;
+	
+	SendMessage(hwndMain,WM_ENABLE,USER_CONTROLLER,0);
+	/*clear information */
+	ShowInfo("\0");
+    /*Initialize net */   
+    WSADATA wsaData;
+    retval = WSAStartup(MAKEWORD(1, 1), &wsaData);
+    if (retval != 0)
+    {
+	  ShowInfo("%s_%d: WSAStartup() error, error code is %d\n", __FILE__, __LINE__, WSAGetLastError());
+      /*if WSAStartup failed,exit*/
+	  MessageBox(hwndMain,TEXT("System incompatible!"),TEXT("ERROR"),MB_ICONERROR);
+	  goto EXIT;
+    }
+    
+	ShowInfo("Rebooting device..\n");	
+    /*Try 3 times...*/
+    for (j = 0;j < 3;j++)
+    {
+        retval = file_download(REBOOT_SHELL, "/tmp/reset_tg.sh");        
+        if( 0 == retval ) 
+        {
+            WINDOWS_DEBUG("Download %s success.\n", REBOOT_SHELL);
+            retval = exec_file_in_tg("/tmp/reset_tg.sh");
+            if( 0 == retval )
+            {
+              WINDOWS_DEBUG("Exec %s success!\n", REBOOT_SHELL);
+              break;
+            }
+        }
+    }
 
+END:
+    WSACleanup();
+EXIT:
+	if(retval != 0)/*FAILED*/
+		PostMessage(hwndMain,WM_ERROR,retval,0);
+	else{/*SUCCESS*/		
+		PostMessage(hwndMain,WM_DOWNLOAD,0,0);
+	}
+    return  (DWORD)retval;
+}
+#warning "need complete this function"
+DWORD WINAPI DownloadTool(LPVOID lpParameter)
+{	
+	char  j, retval;    
+	Sleep(10000);	/*wait for target reboot complete*/
+    //Initialize net
+    WSADATA wsaData;
+    retval = WSAStartup(MAKEWORD(1, 1), &wsaData);
+    if (retval != 0)
+    {
+      ShowInfo("%s_%d: WSAStartup() error, error code is %d\n",
+	  __FILE__, __LINE__, WSAGetLastError());
+      goto EXIT;
+    }    
+
+    /*Try 3 times...*/
+    for (j = 0;j < 3;j++)
+    {
+        retval = file_download(BB_RECOVER_TOOL, "/tmp/linux_bb_recover" );
+        
+        if( 0 == retval ) 
+        {
+            Sleep(50);
+            printf("Download %s success\n", BB_RECOVER_TOOL);
+            retval = exec_file_in_tg("/tmp/linux_bb_recover");
+            if( 0 == retval )
+            {
+              printf("Exec %s success!\n", BB_RECOVER_TOOL);
+              break;
+            }
+        }
+    }
+END:
+    WSACleanup();
+EXIT:
+	if(retval != 0)/*FAILED*/
+		PostMessage(hwndMain,WM_ERROR,retval,0);
+	else{/*SUCCESS*/		
+		PostMessage(hwndMain,WM_REBOOTED,0,0);
+	}
+    return  (DWORD)retval;
+}
+
+//callback function for main window
+LRESULT CALLBACK WndProc(HWND hwnd,UINT message,WPARAM wParam,LPARAM lParam)
+{
+	PAINTSTRUCT ps;
+	HDC hdc;	
+	switch(message){
+		case WM_CREATE:
+		/*create the controller */
+		{
+			int i;
+			for(i = 0; i < CONTROLLER_NUM; ++i){
+				controllerLayout[i].hwnd = CreateWindow (controllerLayout[i].lpszType,controllerLayout[i].lpszString,
+                         controllerLayout[i].dwStyle,controllerLayout[i].x,controllerLayout[i].y,
+						 controllerLayout[i].nWidth,controllerLayout[i].nHeight,
+                         hwnd, (HMENU)i,
+                         hInst, NULL);
+				if( NULL == controllerLayout[i].hwnd){
+					MessageBox(NULL,"Controller create error","Error",MB_ICONERROR);
+					exit(-1);
+				}
+			}
+			hInfo = controllerLayout[6].hwnd;
+		}
+		command= (struct Network_command *)malloc(sizeof(struct Network_command));
+		if(command == NULL){
+			MessageBox(NULL,"Memery alloc failed!","Error",MB_ICONERROR);
+			exit(-1);
+		}
+		
+		break;
+		case WM_COMMAND:
+		{
+			WORD childId = LOWORD(wParam);
+			WORD notify = HIWORD(wParam);
+			WINDOWS_DEBUG("childId = %d\nnotify = %d\n",childId,notify);			
+			if(notify == BN_CLICKED){				
+				switch(childId){
+					//rootfs checked
+					case 1:rootfs_checked = rootfs_checked == 1 ? 0 : 1;
+					break;
+					//userdata checked
+					case 2:userdata_checked = userdata_checked == 1 ? 0 : 1;
+					break;
+					//scan button click
+					case 4:
+					if(IDOK == MessageBox(hwndMain,TEXT("This operation will reboot your device,Are you sure want to do this?"),\
+					TEXT("Notice"),MB_OKCANCEL)){
+						PostMessage(hwndMain,WM_REBOOTING,0,0);
+					}					
+					break;
+					//recover button click
+					case 5:			
+					PostMessage(hwndMain,WM_RECOVERING,0,0);	
+					break;
+					default:
+					MessageBox(NULL,"Controller message error","Error",MB_ICONERROR);
+					WINDOWS_DEBUG("Unhandled Message:%s:%d",__func__,__LINE__);
+					PostMessage(hwndMain,WM_ERROR,0,0);
+					break;
+				}
+			}
+			WINDOWS_DEBUG("rootfs = %d\nuserdata = %d\n",rootfs_checked,userdata_checked);
+						
+		}				
+		break;
+		case WM_CLOSE:		
+		if(stage == S_INIT)
+			break;
+		else if(stage == S_CONNECTED || stage == S_SCANED){
+			
+			if(IDYES == MessageBox(hwndMain,TEXT("Are you sure you want quit now?"),TEXT("Notice"),MB_YESNO)){
+				/*reboot the target */
+				memset(command, 0, sizeof(struct Network_command));
+                command->command_id=COMMAND_REBOOT;                
+                int retval=windows_send_command(command);
+				if(retval < 0)					
+					POP_MESSAGE(hwndMain,"Reboot failed! error code is %s\nYou need reboot your device manually.","Error",errcode2_string(retval));
+				break;
+			}
+			else
+				return 0;	/*ignore this close message*/
+		}		
+		else	/*forbidden to close window in other case */
+			return 0;
+		
+		case WM_DESTROY:
+		free(command);
+		//Close socket
+		closesocket(g_socket_to_server);  
+		//terminated DLL  
+		WSACleanup();
+		CloseHandle(hMutex);
+		PostQuitMessage(0);
+		break;
+		case WM_PAINT:
+		hdc = BeginPaint(hwnd,&ps);		
+		EndPaint(hwnd,&ps);
+		break;
+		
+		case WM_INIT:
+			#warning "we need do some init work ,such as global variables,etc.."
+			/*make rootfs and userdata checked*/
+			#warning "bug here! sendmessage didn't work"
+			if(0 == wParam){/*init normally*/
+				WINDOWS_DEBUG("normally enter S_INIT");				
+				ShowInfo("\0");
+			}
+			else{/*jump into init*/
+				WINDOWS_DEBUG("jump into S_INIT");				
+			}
+			//SendMessage(hwndMain,WM_COMMAND,MAKEWPARAM(1,BN_CLICKED),0);/*check rootfs */
+			//SendMessage(hwndMain,WM_COMMAND,MAKEWPARAM(2,BN_CLICKED),0);/*check userdata */
+			/*disable rootfs ,userdata and recover,enable scan*/
+			SendMessage(hwndMain,WM_CTLENABLE,1<<4,0);			
+			stage = S_INIT;	
+				
+		break;
+		case WM_REBOOTING:
+		assert(stage == S_INIT);
+		stage = S_REBOOTING;
+		if(NULL == CreateThread(NULL,0,RebootTarget,NULL,0,NULL))
+			PostMessage(hwndMain,WM_ERROR,0,0);
+		break;
+		
+		case WM_DOWNLOAD:
+		assert(stage == S_REBOOTING);
+		stage = S_DOWNLOAD;
+		if(NULL == CreateThread(NULL,0,DownloadTool,NULL,0,NULL))
+			PostMessage(hwndMain,WM_ERROR,0,0);
+		break;
+		case WM_REBOOTED:
+		break;	
+		
+		case WM_CONNECTING:
+		break;
+		case WM_CONNECTED:
+		break;
+		case WM_SCANING:
+		break;
+		case WM_SCANED:
+		break;
+		case WM_RECOVERING:
+		break;
+		case WM_RECOVERED:
+		break;
+		case WM_ERROR:
+		/*give some notice*/
+		/*judge if's offline*/
+		#warning "need focos here!"
+		if(IsDeviceOffLine()){
+			/*jump to S_INIT*/
+			switch(stage){
+				case S_INIT:
+				break;
+				case S_REBOOTING:
+				break;
+				case S_DOWNLOAD:
+				break;
+				case S_CONNECTING:
+				break;
+				case S_CONNECTED:
+				break;
+				case S_SCANING:
+				break;
+				case S_SCANED:
+				break;
+				case S_RECOVERING:
+				break;
+				case S_RECOVERED:
+				break;
+			}
+		}
+		else{/*and jump to nearest stage*/
+		}
+		break;
+
+		
+		/*enable/disable specified contoller */
+		case WM_CTLENABLE:
+		if(wParam&(1<<1))	/*enable rootfs*/
+			EnableWindow(controllerLayout[1].hwnd,1);
+		else	/*disable rootfs*/
+			EnableWindow(controllerLayout[1].hwnd,0);
+		if(wParam&(1<<2))	/*enable userdata*/
+			EnableWindow(controllerLayout[2].hwnd,1);
+		else	/*disable userdata*/
+			EnableWindow(controllerLayout[2].hwnd,0);
+		if(wParam&(1<<4))	/*enable scan button*/
+			EnableWindow(controllerLayout[4].hwnd,1);
+		else	/*disable scan button*/
+			EnableWindow(controllerLayout[4].hwnd,0);
+		if(wParam&(1<<5))	/*enable recover button*/
+			EnableWindow(controllerLayout[5].hwnd,1);
+		else	/*disable recover button*/
+			EnableWindow(controllerLayout[5].hwnd,0);		
+		break; 
+		
+		/* case WM_DEVICECHANGE:
+		if(stage == S_INIT){
+			//if device changed and not connected,then try to connect 
+			SendMessage(hwndMain,WM_CONNECT,0,0);
+		}
+		else if(stage != S_CONNECTING && IsDeviceOffLine()){
+			//if our device removed ,init environment and disable user input controller 
+			SetWindowText(hInfo,"Device removed!\nPlease Reconnect your device!");
+			stage = S_INIT;
+			bb_num_rootfs=-1;
+			bb_num_userdata=-1;
+			recover_bb_num=-1;
+			rootfs_recovered=0;
+			userdata_recovered=0;
+			PostMessage(hwndMain,WM_CTLDISABLE,0,0);
+		}		
+		break;
+		 */
+		default:
+		break;
+	}
+	return DefWindowProc(hwnd,message,wParam,lParam);
+}
 
 
