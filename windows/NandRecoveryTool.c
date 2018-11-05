@@ -291,7 +291,7 @@ DWORD WINAPI ScanDevice(LPVOID lpParameter)
 		MessageBox(hwndMain,"Stage error!","error",MB_ICONERROR);
 		exit(-1);
 	}	
-	PostMessage(hwndMain,WM_ENABLE,0,0);
+	PostMessage(hwndMain,WM_CTLENABLE,0,0);
 	stage = S_SCANING;
 	/*do the scan job */
 	ClearInfo();
@@ -371,7 +371,7 @@ DWORD WINAPI RecoverDevice(LPVOID lpParameter)
 		MessageBox(hwndMain,"Stage error!","error",MB_ICONERROR);
 		exit(-1);
 	}
-	PostMessage(hwndMain,WM_ENABLE,0,0);
+	PostMessage(hwndMain,WM_CTLENABLE,0,0);
 	stage = S_RECOVERING;
 	/*do the recover job */
 	ClearInfo();
@@ -579,7 +579,7 @@ DWORD WINAPI RebootTarget(LPVOID lpParameter)
 {
 	char  j, retval;
 	
-	SendMessage(hwndMain,WM_ENABLE,USER_CONTROLLER,0);
+	SendMessage(hwndMain,WM_CTLENABLE,0,0);
 	/*clear information */
 	ShowInfo("\0");
     /*Initialize net */   
