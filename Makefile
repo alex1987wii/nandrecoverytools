@@ -21,7 +21,7 @@ UTIL_VERSION = v0.1
 
 ifeq ($(OBJECT),windows) 
     # compile flag and link flag definitions
-    CFLAGS  = -DFT_WINDOW -DNT_WINDOW -O2 -g -I ./include -DSF_VERSION=\"$(UTIL_VERSION)\"
+    CFLAGS  = -DFT_WINDOW -DNT_WINDOW -O2 -I ./include -DSF_VERSION=\"$(UTIL_VERSION)\"
     LDFLAGS = -lcomctl32 -lsetupapi -lWs2_32 -lshlwapi
 
 endif
