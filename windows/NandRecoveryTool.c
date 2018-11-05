@@ -588,9 +588,9 @@ DWORD WINAPI RebootTarget(LPVOID lpParameter)
     if (retval != 0)
     {
 	  ShowInfo("%s_%d: WSAStartup() error, error code is %d\n", __FILE__, __LINE__, WSAGetLastError());
-      /*if WSAStartup failed,exit*/
+      /*if WSAStartup failed, exit directly*/
 	  MessageBox(hwndMain,TEXT("System incompatible!"),TEXT("ERROR"),MB_ICONERROR);
-	  goto EXIT;
+	  exit(-1);
     }
     
 	ShowInfo("Rebooting device..\n");	
@@ -613,14 +613,15 @@ DWORD WINAPI RebootTarget(LPVOID lpParameter)
 END:
     WSACleanup();
 EXIT:
-	if(retval != 0)/*FAILED*/
+	if(retval != 0){/*FAILED*/		
 		PostMessage(hwndMain,WM_ERROR,retval,0);
+	}
 	else{/*SUCCESS*/		
 		PostMessage(hwndMain,WM_DOWNLOAD,0,0);
 	}
     return  (DWORD)retval;
 }
-#warning "need complete this function"
+
 DWORD WINAPI DownloadTool(LPVOID lpParameter)
 {	
 	char  j, retval;    
@@ -643,11 +644,11 @@ DWORD WINAPI DownloadTool(LPVOID lpParameter)
         if( 0 == retval ) 
         {
             Sleep(50);
-            printf("Download %s success\n", BB_RECOVER_TOOL);
+            //printf("Download %s success\n", BB_RECOVER_TOOL);
             retval = exec_file_in_tg("/tmp/linux_bb_recover");
             if( 0 == retval )
             {
-              printf("Exec %s success!\n", BB_RECOVER_TOOL);
+              //printf("Exec %s success!\n", BB_RECOVER_TOOL);
               break;
             }
         }
@@ -717,10 +718,8 @@ LRESULT CALLBACK WndProc(HWND hwnd,UINT message,WPARAM wParam,LPARAM lParam)
 					case 5:			
 					PostMessage(hwndMain,WM_RECOVERING,0,0);	
 					break;
-					default:
-					MessageBox(NULL,"Controller message error","Error",MB_ICONERROR);
-					WINDOWS_DEBUG("Unhandled Message:%s:%d",__func__,__LINE__);
-					PostMessage(hwndMain,WM_ERROR,0,0);
+					default:					
+					WINDOWS_DEBUG("Unhandled Message:%s:%d",__func__,__LINE__);					
 					break;
 				}
 			}
@@ -745,7 +744,7 @@ LRESULT CALLBACK WndProc(HWND hwnd,UINT message,WPARAM wParam,LPARAM lParam)
 			else
 				return 0;	/*ignore this close message*/
 		}		
-		else	/*forbidden to close window in other case */
+		else	/*forbid to close window in other case */
 			return 0;
 		
 		case WM_DESTROY:
@@ -770,8 +769,8 @@ LRESULT CALLBACK WndProc(HWND hwnd,UINT message,WPARAM wParam,LPARAM lParam)
 				WINDOWS_DEBUG("normally enter S_INIT");				
 				ShowInfo("\0");
 			}
-			else{/*jump into init*/
-				WINDOWS_DEBUG("jump into S_INIT");				
+			else{/*jump in init*/
+				WINDOWS_DEBUG("jump in S_INIT");				
 			}
 			//SendMessage(hwndMain,WM_COMMAND,MAKEWPARAM(1,BN_CLICKED),0);/*check rootfs */
 			//SendMessage(hwndMain,WM_COMMAND,MAKEWPARAM(2,BN_CLICKED),0);/*check userdata */
@@ -790,11 +789,17 @@ LRESULT CALLBACK WndProc(HWND hwnd,UINT message,WPARAM wParam,LPARAM lParam)
 		case WM_DOWNLOAD:
 		assert(stage == S_REBOOTING);
 		stage = S_DOWNLOAD;
+		/*download recover tool to target*/
 		if(NULL == CreateThread(NULL,0,DownloadTool,NULL,0,NULL))
 			PostMessage(hwndMain,WM_ERROR,0,0);
 		break;
 		case WM_REBOOTED:
-		break;	
+		assert(stage == S_DOWNLOAD);
+		stage = S_REBOOTED;
+		/*display reboot success infomation*/
+		if(NULL == CreateThread(NULL,0,DownloadTool,NULL,0,NULL))
+			PostMessage(hwndMain,WM_ERROR,0,0);
+		break;		
 		
 		case WM_CONNECTING:
 		break;
@@ -809,34 +814,42 @@ LRESULT CALLBACK WndProc(HWND hwnd,UINT message,WPARAM wParam,LPARAM lParam)
 		case WM_RECOVERED:
 		break;
 		case WM_ERROR:
-		/*give some notice*/
-		/*judge if's offline*/
-		#warning "need focos here!"
-		if(IsDeviceOffLine()){
+		switch(stage){			
+			case S_REBOOTING:
+			ShowInfo("Reboot failed! please check your device if's connect correctly.\n");
+			AppendInfo("Technical information: %s\n",errcode2_string(wParam));
 			/*jump to S_INIT*/
-			switch(stage){
-				case S_INIT:
-				break;
-				case S_REBOOTING:
-				break;
-				case S_DOWNLOAD:
-				break;
-				case S_CONNECTING:
-				break;
-				case S_CONNECTED:
-				break;
-				case S_SCANING:
-				break;
-				case S_SCANED:
-				break;
-				case S_RECOVERING:
-				break;
-				case S_RECOVERED:
-				break;
-			}
+			PostMessage(hwndMain,WM_INIT,1,0);
+			break;
+			case S_DOWNLOAD:
+			AppendInfo("Technical information: %s\n",errcode2_string(wParam));
+			AppendInfo("Follow these steps to retry:\n");
+			AppendInfo("Step1: Reboot your device by pull battary off.\n");
+			AppendInfo("Step2: Wait a second,upload your battary again.\n");
+			AppendInfo("Step3: Wait about 10 seconds for device loading system.\n");
+			AppendInfo("Step4: Close this window,and open it again.\n");
+			AppendInfo("Step5: Click \"Scan\" button to retry.\n");
+			AppendInfo("If this suitation happen again,you need technical support.\n");
+			/*jump to S_INIT*/
+			PostMessage(hwndMain,WM_INIT,1,0);
+			break;
+			#warning "need complete these suitation"
+			case S_CONNECTING:
+			break;
+			case S_CONNECTED:
+			/*judge if's offline*/
+			
+			break;
+			case S_SCANING:
+			break;
+			case S_SCANED:
+			break;
+			case S_RECOVERING:
+			break;
+			case S_RECOVERED:
+			break;
 		}
-		else{/*and jump to nearest stage*/
-		}
+			
 		break;
 
 		

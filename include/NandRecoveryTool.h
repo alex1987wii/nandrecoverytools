@@ -14,8 +14,7 @@ typedef struct tagLAYOUT{
 }LAYOUT;
 enum STAGE{
 	S_INIT=0,
-	S_REBOOTING,
-	#warning "don't need any more,remove them when done"
+	S_REBOOTING,	
 	S_DOWNLOAD,
 	S_REBOOTED,	
 	S_CONNECTING,
