@@ -552,7 +552,8 @@ DWORD WINAPI RebootTarget(LPVOID lpParameter)
 END:
     WSACleanup();
 EXIT:
-	if(retval != 0){/*FAILED*/		
+	if(retval != 0){/*FAILED*/
+		ClearInfo();
 		PostMessage(hwndMain,WM_ERROR,retval,0);
 	}
 	else{/*SUCCESS*/		
@@ -639,7 +640,9 @@ EXIT:
 LRESULT CALLBACK WndProc(HWND hwnd,UINT message,WPARAM wParam,LPARAM lParam)
 {
 	PAINTSTRUCT ps;
-	HDC hdc;	
+	HDC hdc;
+	static int scan_error_cnt = 0;	/*device online but scan failed times */
+	static int recover_error_cnt = 0;	/*device online but recover failed times*/
 	switch(message){
 		case WM_CREATE:
 		/*create the controller */
@@ -741,14 +744,16 @@ LRESULT CALLBACK WndProc(HWND hwnd,UINT message,WPARAM wParam,LPARAM lParam)
 		break;
 		
 		case WM_INIT:				
-			if(0 == wParam){/*init normally*/
+			if(0 == wParam){/*normally entry S_INIT*/
 #warning "do we need tips here?"			
 				ShowInfo("\0");
 			}
-			else{/*jump in init*/
+			else{/*jump in S_INIT*/
+				/*restore scan_error_cnt and recover_error_cnt */
+				scan_error_cnt = 0;
+				recover_error_cnt = 0;
 				ClearInfo();							
-			}
-			
+			}			
 			/*make rootfs and userdata checked*/
 			rootfs_checked = 0;
 			userdata_checked = 0;
@@ -759,7 +764,7 @@ LRESULT CALLBACK WndProc(HWND hwnd,UINT message,WPARAM wParam,LPARAM lParam)
 			stage = S_INIT;				
 		break;
 		
-		case WM_REBOOTING:
+		case WM_REBOOTING:		
 		assert(stage == S_INIT);
 		stage = S_REBOOTING;
 		ClearInfo();
@@ -877,8 +882,20 @@ LRESULT CALLBACK WndProc(HWND hwnd,UINT message,WPARAM wParam,LPARAM lParam)
 				ERROR_MESSAGE(hwndMain,"Can't detected target device! you need reboot your device manually and try it again.");
 				PostMessage(hwndMain,WM_INIT,1,0);
 			}
-			else{	/*jump to S_CONNECTED*/			
-				ERROR_MESSAGE(hwndMain,"Scan failed! please retry.");
+			else{	/*jump to S_CONNECTED*/				
+				++scan_error_cnt;
+				if(scan_error_cnt <= 3){
+					ERROR_MESSAGE(hwndMain,"Scan failed! please retry.");					
+				}else if(IDOK == MessageBox(hwndMain,TEXT("Scan failed too many times! quit and try it again?"),TEXT("Error"),MB_ICONERROR | MB_OKCANCEL)){
+					/*reboot target*/
+					memset(command, 0, sizeof(struct Network_command));
+					command->command_id=COMMAND_REBOOT;                
+					int retval=windows_send_command(command);
+					if(retval < 0)					
+						ERROR_MESSAGE(hwndMain,"Reboot failed! error code is %s\nYou need reboot your device manually.",errcode2_string(retval));
+					PostMessage(hwndMain,WM_DESTROY,0,0);
+					break;
+				}
 				PostMessage(hwndMain,WM_CONNECTED,1,0);
 			}
 			ClearInfo();			
@@ -892,10 +909,21 @@ LRESULT CALLBACK WndProc(HWND hwnd,UINT message,WPARAM wParam,LPARAM lParam)
 				ERROR_MESSAGE(hwndMain,"Can't detected target device! you need reboot your device manually and try it again.");
 				PostMessage(hwndMain,WM_INIT,1,0);
 			}
-			else{	/*jump to S_SCANED*/
-				
-				ERROR_MESSAGE(hwndMain,"Recover failed! please retry.");
-				PostMessage(hwndMain,WM_SCANED,1,0);
+			else{	/*jump to S_SCANED*/			
+				++recover_error_cnt;
+				if(recover_error_cnt <= 3){
+					ERROR_MESSAGE(hwndMain,"Recover failed! please retry.");					
+				}else if(IDOK == MessageBox(hwndMain,TEXT("Recover failed too many times! quit and try it again?"),TEXT("Error"),MB_ICONERROR | MB_OKCANCEL)){
+					/*reboot target*/
+					memset(command, 0, sizeof(struct Network_command));
+					command->command_id=COMMAND_REBOOT;                
+					int retval=windows_send_command(command);
+					if(retval < 0)					
+						ERROR_MESSAGE(hwndMain,"Reboot failed! error code is %s\nYou need reboot your device manually.",errcode2_string(retval));
+					PostMessage(hwndMain,WM_DESTROY,0,0);
+					break;
+				}
+				PostMessage(hwndMain,WM_SCANED,1,0);				
 			}
 			ClearInfo();
 			break;
