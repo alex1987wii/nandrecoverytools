@@ -23,6 +23,6 @@ enum STAGE{
 	S_SCANED,
 	S_RECOVERING,
 	S_RECOVERED,
-	S_ERROR	
+	S_MAXSTAGE
 };
 #endif
