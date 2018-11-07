@@ -12,8 +12,7 @@
 #
 # UTIL_VERSION: Build version, such as "v0.1"
 #
-CC=gcc
-RC=windres
+
 OBJECT=windows
 #OBJECT = linux
 UTIL_VERSION = v0.1
@@ -21,6 +20,8 @@ UTIL_VERSION = v0.1
 
 ifeq ($(OBJECT),windows) 
     # compile flag and link flag definitions
+	CC=gcc
+	RC=windres
     CFLAGS  = -DFT_WINDOW -DNT_WINDOW -O2 -I ./include -DSF_VERSION=\"$(UTIL_VERSION)\"
     LDFLAGS = -lcomctl32 -lsetupapi -lWs2_32 -lshlwapi
 

@@ -25,7 +25,7 @@
 #define CONTROLLER_NUM			7
 #define MAX_STRING				1024
 
-#warning "debug info,need remove when release!"
+
 #define WINDOWS_DEBUG_ENABLE                                     
 
 #ifdef WINDOWS_DEBUG_ENABLE	 
@@ -84,7 +84,7 @@ static TCHAR MessageBoxBuff[MAX_STRING];  /*buffer for messagebox */
 static HINSTANCE hInst; /*NandRecoveryTool's instance */
 static HWND hwndMain=NULL,hInfo=NULL; /*handle for Main window and information window */
 static HANDLE hMutex; /* handle for mutex */
-static char *szAppName = APP_TITLE;	/*APP title */
+static TCHAR *szAppName = APP_TITLE;	/*APP title */
 static int stage = -1;	/*NandRecoveryTool's current stat */
 
 static const unsigned char TARGET_IP[]={"10.10.0.12"}; /*target device's ip address */
@@ -155,7 +155,7 @@ const char *errcode_map[]={
 };
 /*define user error code */
 #define ERROR_THREAD_CREATE_FAILED		-1
-
+#define ERROR_DEVICE_OFFLINE			-2
 /*translate errcode to error information */
 static inline const char *errcode2_string(int errcode){
 	if(errcode < ERROR_CODE_OPEN_FILE_ERROR)
@@ -179,6 +179,8 @@ static inline const char *errcode2_string(int errcode){
 	switch(errcode){
 		case ERROR_THREAD_CREATE_FAILED:
 		return "ERROR_THREAD_CREATE_FAILED";
+		case ERROR_DEVICE_OFFLINE:
+		return "ERROR_DEVICE_OFFLINE";
 		case COMMAND_OPERATION_ERROR_ACK:
 		return "ERROR_COMMAND_OPERATION_ERROR_ACK";
 		default:
@@ -349,10 +351,14 @@ DWORD WINAPI ScanDevice(LPVOID lpParameter)
 	if(rootfs_checked != 1 && userdata_checked != 1){
 		ShowInfo("No partition selected.\n");
 		goto EXIT;
+	}
+	if(IsDeviceOffLine()){
+		retval = ERROR_DEVICE_OFFLINE;
+		goto EXIT;
 	}	
 	memset(command, 0, sizeof(struct Network_command));
 	if(rootfs_checked == 1){		
-		ShowInfo("Scaning rootfs partition..\n");
+		ShowInfo("Scaning ROOTFS partition..\n");
 		command->command_id = CHECK_BB_ROOT_PATITION;
 		retval=windows_send_command(command);
 		if(retval < 0){
@@ -369,7 +375,7 @@ DWORD WINAPI ScanDevice(LPVOID lpParameter)
 		}
 		if(command->command_id == CHECK_BB_ROOT_PATITION_ACK && retval >0){
 			bb_num_rootfs = command->data;
-            ShowInfo("Scan rootfs partition success!\nRootfs partition bad block number:%u\n", bb_num_rootfs);
+            ShowInfo("Scan ROOTFS partition success!\nROOTFS partition bad block number: %u\n", bb_num_rootfs);
 			retval = 0;
 		}
 		else{
@@ -383,9 +389,9 @@ DWORD WINAPI ScanDevice(LPVOID lpParameter)
 		}
 	}
 	if(userdata_checked == 1){
-		/*save the information position for recover when userdata scaned*/
+		/*save the information position for recover when USERDATA scaned*/
 		int InfoPos = lstrlen(lpszInformation);		
-		AppendInfo("Scaning userdata partition..\n");
+		AppendInfo("Scaning USERDATA partition..\n");
 		command->command_id = CHECK_BB_USER_PATITON;
 		retval=windows_send_command(command);
 		if(retval < 0){
@@ -402,7 +408,7 @@ DWORD WINAPI ScanDevice(LPVOID lpParameter)
 		}
 		if(command->command_id == CHECK_BB_USER_PATITON_ACK && retval >0){
 			bb_num_userdata = command->data;
-			snprintf(lpszInformation+InfoPos,MAX_STRING-InfoPos,TEXT("Scan userdata partition success!\nUserdata partition bad block number:%u\n"),bb_num_userdata);
+			snprintf(lpszInformation+InfoPos,MAX_STRING-InfoPos,TEXT("Scan USERDATA partition success!\nUSERDATA partition bad block number: %u\n"),bb_num_userdata);
 			SetWindowText(hInfo,lpszInformation);
 			retval = 0;
 		}
@@ -436,6 +442,10 @@ DWORD WINAPI RecoverDevice(LPVOID lpParameter)
 		AppendInfo("No partition selected.\n");
 		goto EXIT;
 	}
+	if(IsDeviceOffLine()){
+		retval = ERROR_DEVICE_OFFLINE;
+		goto EXIT;
+	}
 	/*this macro used just for here,do not use it in other place
 	*it do that if it will do actual recover job,then you will get 1(TRUE),
 	*otherwise,you will get 0(FALSE) */
@@ -451,13 +461,13 @@ rootfs:
 	if(rootfs_checked == 1){		
 		if(bb_num_rootfs <= 20){
 			if(bb_num_rootfs == 0)
-				AppendInfo("There's no bad block in rootfs partition.\n");
+				AppendInfo("There's no bad block in ROOTFS partition.\n");
 			else
-				AppendInfo("There's only %u bad block(s) in rootfs partition, it's NOT necessary to recover it.\n", 
+				AppendInfo("There's only %u bad block(s) in ROOTFS partition, it's NOT necessary to recover it.\n", 
                             bb_num_rootfs);			
 			goto userdata;
 		}
-		AppendInfo("Recovering rootfs partition..\n");		
+		AppendInfo("Recovering ROOTFS partition..\n");		
 		command->command_id = RECOVER_BB_ROOT_PATITION;		
 		retval=windows_send_command(command);
 		if(retval < 0){
@@ -473,7 +483,7 @@ rootfs:
             recover_bb_num=(unsigned int)command->data;
 			/*truncate the processing information */
 			lpszInformation[pos] = TEXT('\0');
-            AppendInfo("Recovered rootfs bad block:%u, processing: %2.2f%%\n", 
+            AppendInfo("Recovered ROOTFS bad block: %u, processing: %2.2f%%\n", 
             recover_bb_num, ( (float)recover_bb_num / (float)bb_num_rootfs ) *100);
 			
 		}while(command->command_id != RECOVER_BB_FINISH_ACK && retval > 0);
@@ -481,9 +491,9 @@ rootfs:
         {
             /*All the Bad Blocks are recovered*/
             if(recover_bb_num%bb_num_rootfs==0)
-                ShowInfo("Recover rootfs partition success!\n");
+                ShowInfo("Recover ROOTFS partition success!\n");
             else /*Leave some TURE Bad Block(s), that is not recoverable*/
-                ShowInfo("Recover rootfs partition success, remain %d TURE Bad Block(s).\n", 
+                ShowInfo("Recover ROOTFS partition success, remain %d TURE Bad Block(s).\n", 
                     bb_num_rootfs -recover_bb_num);
 			rootfs_recovered = 1;
 			retval = 0;
@@ -504,13 +514,13 @@ userdata:
 	if(userdata_checked == 1){			
 		if(bb_num_userdata <= 30){
 			if(bb_num_userdata == 0)
-				AppendInfo("There's no bad block in userdata partition.\n");
+				AppendInfo("There's no bad block in USERDATA partition.\n");
 			else
-				AppendInfo("There's only %d bad block(s) in userdata partition, it's NOT necessary to recover it.\n", 
+				AppendInfo("There's only %d bad block(s) in USERDATA partition, it's NOT necessary to recover it.\n", 
 				bb_num_userdata);
 			goto EXIT;
 		}
-		AppendInfo("Recovering userdata partition..\n");		
+		AppendInfo("Recovering USERDATA partition..\n");		
 		command->command_id = RECOVER_BB_USER_PATITION;
 		retval=windows_send_command(command);
 		if(retval < 0){
@@ -526,7 +536,7 @@ userdata:
             recover_bb_num=(unsigned int)command->data;
 			/*truncate the processing information */
 			lpszInformation[pos] = TEXT('\0');
-            AppendInfo("Recovered userdata bad blocks:%u, processing: %2.2f%%\n", 
+            AppendInfo("Recovered USERDATA bad blocks: %u, processing: %2.2f%%\n", 
                     recover_bb_num, ( (float)recover_bb_num / (float)bb_num_userdata ) *100);
 			
 		}while(command->command_id != RECOVER_BB_FINISH_ACK && retval > 0);
@@ -538,9 +548,9 @@ userdata:
 			lpszInformation[old_pos] = TEXT('\0');
             /*All the Bad Blocks are recovered*/
             if(recover_bb_num%bb_num_userdata==0)
-                AppendInfo("Recover userdata partition success!\n");
+                AppendInfo("Recover USERDATA partition success!\n");
             else /*Leave some TURE Bad Block(s), that is not recoverable*/
-                AppendInfo("Recover userdata partition success, remain %d TURE Bad Block(s).\n", 
+                AppendInfo("Recover USERDATA partition success, remain %d TURE Bad Block(s).\n", 
                         bb_num_userdata - recover_bb_num);
 			userdata_recovered = 1;
 			retval = 0;
@@ -678,8 +688,7 @@ LRESULT CALLBACK WndProc(HWND hwnd,UINT message,WPARAM wParam,LPARAM lParam)
 		break;
 		
 		case WM_INIT:				
-			if(0 == wParam){/*normally entry S_INIT*/
-#warning "do we need tips here?"			
+			if(0 == wParam){/*normally entry S_INIT*/			
 				ShowInfo("\0");
 			}
 			else{/*jump in S_INIT*/
@@ -809,7 +818,7 @@ LRESULT CALLBACK WndProc(HWND hwnd,UINT message,WPARAM wParam,LPARAM lParam)
 			AppendInfo("Step1: Reboot your device by pull battary off.\n");
 			AppendInfo("Step2: Wait a second,upload your battary again.\n");
 			AppendInfo("Step3: Wait about 10 seconds for device loading system.\n");
-			AppendInfo("Step4: Close this window,and open it again.\n");
+			AppendInfo("Step4: Close this window,and then open it again.\n");
 			AppendInfo("Step5: Click \"Scan\" button to retry.\n");
 			AppendInfo("If this suitation happen again,you need technical support.\n");
 			/*Users don't care about download stage，make these two stage as one*/
@@ -823,7 +832,7 @@ LRESULT CALLBACK WndProc(HWND hwnd,UINT message,WPARAM wParam,LPARAM lParam)
 			AppendInfo("Technical information: %s\n",errcode2_string(wParam));
 			/*IsDeviceOffLine may block 25 seconds most,but return immediately if device removed,if connection not stable,
 			**it can be blocks long time,in this case,main window will sleep for x(max:25) seconds*/
-			if(IsDeviceOffLine()){	/*jump to S_INIT*/
+			if(wParam == ERROR_DEVICE_OFFLINE || IsDeviceOffLine()){	/*jump to S_INIT*/
 				ERROR_MESSAGE(hwndMain,"Can't detected target device! you need reboot your device manually and try it again.");
 				PostMessage(hwndMain,WM_INIT,1,0);
 			}
@@ -850,7 +859,7 @@ LRESULT CALLBACK WndProc(HWND hwnd,UINT message,WPARAM wParam,LPARAM lParam)
 			/*judge if's offline*/
 			AppendInfo("Technical information: %s\n",errcode2_string(wParam));
 			
-			if(IsDeviceOffLine()){	/*jump to S_INIT*/
+			if(wParam == ERROR_DEVICE_OFFLINE || IsDeviceOffLine()){	/*jump to S_INIT*/
 				ERROR_MESSAGE(hwndMain,"Can't detected target device! you need reboot your device manually and try it again.");
 				PostMessage(hwndMain,WM_INIT,1,0);
 			}
@@ -918,7 +927,7 @@ int APIENTRY WinMain(HINSTANCE hInstance,HINSTANCE hPrevInstance,
 	if (GetLastError() == ERROR_ALREADY_EXISTS)
 	{
 		CloseHandle(hMutex);
-		MessageBox(NULL,"Already running!","Notice",MB_OK);
+		MessageBox(NULL,MUTEX_NAME TEXT(" is running!"),TEXT(szAppName),MB_ICONERROR);
 		return FALSE;
 	}
 
