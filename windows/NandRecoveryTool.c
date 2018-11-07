@@ -26,7 +26,7 @@
 #define MAX_STRING				1024
 
 
-#define WINDOWS_DEBUG_ENABLE                                     
+//#define WINDOWS_DEBUG_ENABLE                                     
 
 #ifdef WINDOWS_DEBUG_ENABLE	 
     #define WINDOWS_DEBUG(fmt, args...)  ({snprintf(MessageBoxBuff,MAX_STRING,TEXT(fmt),##args);MessageBox(NULL,MessageBoxBuff,TEXT("Debug"),MB_OK);})   
@@ -375,7 +375,7 @@ DWORD WINAPI ScanDevice(LPVOID lpParameter)
 		}
 		if(command->command_id == CHECK_BB_ROOT_PATITION_ACK && retval >0){
 			bb_num_rootfs = command->data;
-            ShowInfo("Scan ROOTFS partition success!\nROOTFS partition bad block number: %u\n", bb_num_rootfs);
+            ShowInfo("ROOTFS partition bad block number: %u\n", bb_num_rootfs);
 			retval = 0;
 		}
 		else{
@@ -408,7 +408,7 @@ DWORD WINAPI ScanDevice(LPVOID lpParameter)
 		}
 		if(command->command_id == CHECK_BB_USER_PATITON_ACK && retval >0){
 			bb_num_userdata = command->data;
-			snprintf(lpszInformation+InfoPos,MAX_STRING-InfoPos,TEXT("Scan USERDATA partition success!\nUSERDATA partition bad block number: %u\n"),bb_num_userdata);
+			snprintf(lpszInformation+InfoPos,MAX_STRING-InfoPos,TEXT("USERDATA partition bad block number: %u\n"),bb_num_userdata);
 			SetWindowText(hInfo,lpszInformation);
 			retval = 0;
 		}
@@ -770,6 +770,9 @@ LRESULT CALLBACK WndProc(HWND hwnd,UINT message,WPARAM wParam,LPARAM lParam)
 		break;
 		case WM_SCANED:
 		stage = S_SCANED;
+		if(wParam == 0){/*normally entry*/
+			POP_MESSAGE(hwndMain,"Scan complete!","Notice");
+		}
 		/*restore some global variables*/
 		rootfs_recovered=0;	/*stand for rootfs option is recovered? */
 		userdata_recovered=0;	/*stand for userdata option is recovered? */
@@ -792,7 +795,7 @@ LRESULT CALLBACK WndProc(HWND hwnd,UINT message,WPARAM wParam,LPARAM lParam)
 		assert(stage == S_RECOVERING);
 		stage = S_RECOVERED;
 		/*give users a pop message and then reboot target*/
-		POP_MESSAGE(hwndMain,"Recover complete!target will be rebooted.","Notice");
+		POP_MESSAGE(hwndMain,"Recover complete! target will be rebooted.","Notice");
 		memset(command, 0, sizeof(struct Network_command));
         command->command_id=COMMAND_REBOOT;                
         int retval=windows_send_command(command);
