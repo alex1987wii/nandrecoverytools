@@ -14,7 +14,6 @@
 
 #define BB_RECOVER_TOOL      "linux_bb_recover_v0.1"    /*Fake Bad Block recover tool, runing in ARM side*/
 
-
 #define APP_TITLE   TEXT("Unication Nandflash Scan&Recovery Tool")
 #define MUTEX_NAME	TEXT("Unication Dev Tools")
 
@@ -212,7 +211,6 @@ static int IsDeviceOffLine(void)
 	if(windows_send_command(&check_command)<0)
 		return 1;
 	memset(&check_command, 0, sizeof(struct Network_command));
-#warning "recv_from_server may block 25 seconds,need fix that make IsDeviceOffLine return as soon as possible"	
 	if(recv_from_server(&check_command) > 0 && check_command.command_id == CHECK_NETWORK_STATU_ACK)
 		return 0;
 	return 1;

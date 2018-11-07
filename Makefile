@@ -13,8 +13,8 @@
 # UTIL_VERSION: Build version, such as "v0.1"
 #
 
-OBJECT=windows
-#OBJECT = linux
+#OBJECT=windows
+OBJECT = linux
 UTIL_VERSION = v0.1
 
 
