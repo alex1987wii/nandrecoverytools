@@ -40,7 +40,7 @@
 /*use hInfo to append information in lpszInformation,use it carefully when hInfo have been initialized */
 #define AppendInfo(fmt,args...)		({snprintf(lpszInformation+lstrlen(lpszInformation),MAX_STRING-lstrlen(lpszInformation),TEXT(fmt),##args);\
 SetWindowText(hInfo,lpszInformation);})
-#define ClearInfo()		lpszInformation[0]=TEXT('\0')
+#define ClearInfoBuff()		lpszInformation[0]=TEXT('\0')
 #define ShowInfo(fmt,args...)		({snprintf(lpszInformation,MAX_STRING,TEXT(fmt),##args);SetWindowText(hInfo,lpszInformation);})
 
 
@@ -209,23 +209,147 @@ static int IsDeviceOffLine(void)
 	check_command.command_id=CHECK_NETWORK_STATU;	
 	if(windows_send_command(&check_command)<0)
 		return 1;
-	memset(&check_command, 0, sizeof(struct Network_command));	          
+	memset(&check_command, 0, sizeof(struct Network_command));
+#warning "recv_from_server may block 25 seconds,need fix that make IsDeviceOffLine return as soon as possible"	
 	if(recv_from_server(&check_command) > 0 && check_command.command_id == CHECK_NETWORK_STATU_ACK)
 		return 0;
 	return 1;
+}
+
+
+DWORD WINAPI RebootTarget(LPVOID lpParameter)
+{
+	char  j, retval;	
+	ClearInfoBuff();	
+    /*Initialize net */   
+    WSADATA wsaData;
+    retval = WSAStartup(MAKEWORD(1, 1), &wsaData);
+    if (retval != 0)
+    {
+	  ShowInfo("%s_%d: WSAStartup() error, error code is %d\n", __FILE__, __LINE__, WSAGetLastError());
+      /*if WSAStartup failed, exit directly*/
+	  MessageBox(hwndMain,TEXT("System incompatible!"),TEXT("ERROR"),MB_ICONERROR);
+	  exit(-1);
+    }
+    
+	ShowInfo("Rebooting device..\n");	
+    /*Try 3 times...*/
+    for (j = 0;j < 3;j++)
+    {
+        retval = file_download(REBOOT_SHELL, "/tmp/reset_tg.sh");        
+        if( 0 == retval ) 
+        {
+			#ifdef WINDOWS_DEBUG_ENABLE
+            AppendInfo("Download %s success.\n", REBOOT_SHELL);
+			#endif           
+            retval = exec_file_in_tg("/tmp/reset_tg.sh");
+            if( 0 == retval )
+            {
+				#ifdef WINDOWS_DEBUG_ENABLE
+				AppendInfo("Exec %s success!\n", REBOOT_SHELL);
+				#endif
+				break;
+            }
+        }
+    }
+
+END:
+    WSACleanup();
+EXIT:
+	if(retval != 0){/*FAILED*/
+		ClearInfoBuff();
+		PostMessage(hwndMain,WM_ERROR,retval,0);
+	}
+	else{/*SUCCESS*/		
+		PostMessage(hwndMain,WM_DOWNLOAD,0,0);
+	}
+    return  (DWORD)retval;
+}
+
+DWORD WINAPI DownloadTool(LPVOID lpParameter)
+{	
+	char  j, retval;    
+	Sleep(10000);	/*wait for target reboot complete*/
+	ClearInfoBuff(); /*clear information buff*/
+    //Initialize net
+    WSADATA wsaData;
+    retval = WSAStartup(MAKEWORD(1, 1), &wsaData);
+    if (retval != 0)
+    {
+      ShowInfo("%s_%d: WSAStartup() error, error code is %d\n",
+	  __FILE__, __LINE__, WSAGetLastError());
+      goto EXIT;
+    }    
+
+    /*Try 3 times...*/
+    for (j = 0;j < 3;j++)
+    {
+        retval = file_download(BB_RECOVER_TOOL, "/tmp/linux_bb_recover" );
+        if( 0 == retval ) 
+        {
+            Sleep(50);
+			#ifdef WINDOWS_DEBUG_ENABLE
+            AppendInfo("Download %s success\n", BB_RECOVER_TOOL);
+			#endif
+            retval = exec_file_in_tg("/tmp/linux_bb_recover");
+            if( 0 == retval )
+            {
+			#ifdef WINDOWS_DEBUG_ENABLE
+              AppendInfo("Exec %s success!\n", BB_RECOVER_TOOL);
+			#endif
+              break;
+            }
+        }
+    }
+END:
+    WSACleanup();
+EXIT:
+	if(retval != 0){/*FAILED*/
+		PostMessage(hwndMain,WM_ERROR,retval,0);
+	}
+	else{/*SUCCESS*/		
+		PostMessage(hwndMain,WM_REBOOTED,0,0);
+	}
+    return  (DWORD)retval;
+}
+
+DWORD WINAPI ConnectDevice(LPVOID lpParameter)
+{
+	int j,retval=0;
+	
+	Sleep(500);	/*let reboot success information stay a little*/
+	ShowInfo("Connecting target..\n");
+	Sleep(1500);
+	/*try 3 times*/
+	for(j = 0; j < 3 ;++j){
+		retval=network_try2_connect(TARGET_IP, NET_PORT);
+		if(retval >= 0){		
+			ShowInfo("Connect target success!\n");
+			retval = 0;
+			break;
+		}					
+	}
+EXIT:
+	if(retval != 0){/*FAILED*/
+		ClearInfoBuff();
+		PostMessage(hwndMain,WM_ERROR,retval,0);
+	}
+	else{/*SUCCESS*/		
+		PostMessage(hwndMain,WM_CONNECTED,0,0);
+	}
+    return  (DWORD)retval;
 }
 
 //scan device partition
 DWORD WINAPI ScanDevice(LPVOID lpParameter)
 {
 	int retval = 0;	
-	SendMessage(hwndMain,WM_CTLENABLE,0,0);	
+	ClearInfoBuff();
 	/*do the scan job */	
 	if(rootfs_checked != 1 && userdata_checked != 1){
 		ShowInfo("No partition selected.\n");
 		goto EXIT;
-	}
-	ShowInfo("\0");	
+	}	
 	memset(command, 0, sizeof(struct Network_command));
 	if(rootfs_checked == 1){		
 		ShowInfo("Scaning rootfs partition..\n");
@@ -249,6 +373,7 @@ DWORD WINAPI ScanDevice(LPVOID lpParameter)
 			retval = 0;
 		}
 		else{
+			/*not clear the processing information*/
 			if(command->command_id == COMMAND_OPERATION_ERROR_ACK)
 				AppendInfo("EXECUTE CHECK_BB_ROOT_PATITION FAILED!\nERROR CODE:%s\n", errcode2_string(command->data));
 			else
@@ -282,6 +407,7 @@ DWORD WINAPI ScanDevice(LPVOID lpParameter)
 			retval = 0;
 		}
 		else {
+			/*not clear the processing information*/
 			if(command->command_id == COMMAND_OPERATION_ERROR_ACK)
 				AppendInfo("EXECUTE CHECK_BB_USER_PATITON FAILED!\nERROR CODE:%s\n", errcode2_string(command->data));
 			else
@@ -302,12 +428,10 @@ EXIT:
 //recover device partition
 DWORD WINAPI RecoverDevice(LPVOID lpParameter)
 {
-	int old_pos,pos,retval = 0;
+	int old_pos,pos,retval = 0;	
 	
-	SendMessage(hwndMain,WM_CTLENABLE,0,0);
-	ClearInfo();
-	/*do the recover job */
-	#warning "need give focus on,if no partition selected and no error occur ,did it need reboot?"
+	ClearInfoBuff();
+	/*do the recover job */	
 	if(rootfs_checked != 1 && userdata_checked !=1){
 		AppendInfo("No partition selected.\n");
 		goto EXIT;
@@ -337,7 +461,7 @@ rootfs:
 		command->command_id = RECOVER_BB_ROOT_PATITION;		
 		retval=windows_send_command(command);
 		if(retval < 0){
-			ShowInfo("Error: windows_send_command().\nError code=%s.\n", errcode2_string(retval));
+			AppendInfo("Error: windows_send_command().\nError code=%s.\n", errcode2_string(retval));
 			goto EXIT;
 		}
 		/*save the position of information */
@@ -365,6 +489,7 @@ rootfs:
 			retval = 0;
         }
         else {
+			/*not clear the processing information*/
 			if(command->command_id == COMMAND_OPERATION_ERROR_ACK)
 				AppendInfo("EXECUTE RECOVER_BB_ROOT_PATITION FAILED!\nERROR CODE:%s\n", errcode2_string(command->data));
 			else
@@ -420,7 +545,8 @@ userdata:
 			userdata_recovered = 1;
 			retval = 0;
         }
-        else{ 
+        else{
+			/*not clear the processing information*/			
 			if(command->command_id == COMMAND_OPERATION_ERROR_ACK)
 				AppendInfo("EXECUTE RECOVER_BB_USER_PATITION FAILED!\nERROR CODE:%s\n", errcode2_string(command->data));
 			else
@@ -444,6 +570,340 @@ EXIT:
 	}
     return  (DWORD)retval;
 }
+
+//callback function for main window
+LRESULT CALLBACK WndProc(HWND hwnd,UINT message,WPARAM wParam,LPARAM lParam)
+{
+	PAINTSTRUCT ps;
+	HDC hdc;
+	static int scan_error_cnt = 0;	/*device online but scan failed times */
+	static int recover_error_cnt = 0;	/*device online but recover failed times*/
+	switch(message){
+		case WM_CREATE:
+		/*create the controller */
+		{
+			int i;
+			for(i = 0; i < CONTROLLER_NUM; ++i){
+				controllerLayout[i].hwnd = CreateWindow (controllerLayout[i].lpszType,controllerLayout[i].lpszString,
+                         controllerLayout[i].dwStyle,controllerLayout[i].x,controllerLayout[i].y,
+						 controllerLayout[i].nWidth,controllerLayout[i].nHeight,
+                         hwnd, (HMENU)i,
+                         hInst, NULL);
+				if( NULL == controllerLayout[i].hwnd){
+					MessageBox(NULL,"Controller create error","Error",MB_ICONERROR);
+					exit(-1);
+				}
+			}
+			/*make 6th controller as a information window*/
+			hInfo = controllerLayout[6].hwnd;
+		}
+		command= (struct Network_command *)malloc(sizeof(struct Network_command));
+		if(command == NULL){
+			MessageBox(NULL,"Memery alloc failed!","Error",MB_ICONERROR);
+			exit(-1);
+		}
+		
+		break;
+		case WM_COMMAND:
+		{
+			WORD childId = LOWORD(wParam);
+			WORD notify = HIWORD(wParam);						
+			if(notify == BN_CLICKED){				
+				switch(childId){
+					//rootfs checked
+					case 1:rootfs_checked = rootfs_checked == 1 ? 0 : 1;
+					SendMessage(controllerLayout[1].hwnd,BM_SETCHECK,rootfs_checked,0);
+					break;
+					//userdata checked
+					case 2:userdata_checked = userdata_checked == 1 ? 0 : 1;
+					SendMessage(controllerLayout[2].hwnd,BM_SETCHECK,userdata_checked,0);
+					break;
+					//scan button click
+					case 4:
+					assert(stage == S_INIT || stage == S_CONNECTED);
+					if(stage == S_INIT){
+						if(IDOK == MessageBox(hwndMain,TEXT("This operation will reboot your device,Are you sure want to do this?"),\
+							TEXT("Notice"),MB_OKCANCEL)){							
+							SendMessage(hwndMain,WM_REBOOTING,0,0);							
+						}
+					}else if(stage == S_CONNECTED){
+						SendMessage(hwndMain,WM_SCANING,0,0);
+					}else{
+						ERROR_MESSAGE(hwndMain,"%s:%s:%d:error ocurr!",__FILE__,__func__,__LINE__);
+					}						
+					break;
+					//recover button click
+					case 5:			
+					SendMessage(hwndMain,WM_RECOVERING,0,0);	
+					break;
+					default:					
+					WINDOWS_DEBUG("Unhandled Message:%s:%d",__func__,__LINE__);					
+					break;
+				}
+			}			
+						
+		}				
+		break;
+		case WM_CLOSE:		
+		if(stage == S_INIT)
+			break;
+		else if(stage == S_CONNECTED || stage == S_SCANED){			
+			if(IDYES == MessageBox(hwndMain,TEXT("Are you sure you want quit now?"),TEXT("Notice"),MB_YESNO)){
+				/*reboot the target */
+				memset(command, 0, sizeof(struct Network_command));
+                command->command_id=COMMAND_REBOOT;                
+                int retval=windows_send_command(command);
+				if(retval < 0)					
+					ERROR_MESSAGE(hwndMain,"Reboot failed! error code is %s\nYou need reboot your device manually.",errcode2_string(retval));
+				break;
+			}
+			else
+				return 0;	/*ignore this close message*/
+		}		
+		else	/*forbid to close window in other case */
+			return 0;
+		
+		case WM_DESTROY:
+		free(command);
+		//Close socket
+		closesocket(g_socket_to_server);  
+		//terminated DLL  
+		WSACleanup();
+		CloseHandle(hMutex);
+		PostQuitMessage(0);
+		break;
+		case WM_PAINT:
+		hdc = BeginPaint(hwnd,&ps);		
+		EndPaint(hwnd,&ps);
+		break;
+		
+		case WM_INIT:				
+			if(0 == wParam){/*normally entry S_INIT*/
+#warning "do we need tips here?"			
+				ShowInfo("\0");
+			}
+			else{/*jump in S_INIT*/
+				/*restore scan_error_cnt and recover_error_cnt */
+				scan_error_cnt = 0;
+				recover_error_cnt = 0;
+				ClearInfoBuff();							
+			}			
+			/*make rootfs and userdata checked*/
+			rootfs_checked = 0;
+			userdata_checked = 0;
+			SendMessage(hwndMain,WM_COMMAND,MAKEWPARAM(1,BN_CLICKED),0);/*check rootfs */
+			SendMessage(hwndMain,WM_COMMAND,MAKEWPARAM(2,BN_CLICKED),0);/*check userdata */
+			/*disable rootfs ,userdata and recover,enable scan*/
+			SendMessage(hwndMain,WM_CTLENABLE,1<<4,0);			
+			stage = S_INIT;				
+		break;
+		
+		case WM_REBOOTING:
+		assert(stage == S_INIT);
+		stage = S_REBOOTING;		
+		SendMessage(hwndMain,WM_CTLENABLE,0,0);		
+		if(NULL == CreateThread(NULL,0,RebootTarget,NULL,0,NULL)){
+			ClearInfoBuff();
+			PostMessage(hwndMain,WM_ERROR,ERROR_THREAD_CREATE_FAILED,0);
+		}
+		break;
+		
+		case WM_DOWNLOAD:
+		assert(stage == S_REBOOTING);
+		stage = S_DOWNLOAD;
+		/*download recover tool to target*/
+		if(NULL == CreateThread(NULL,0,DownloadTool,NULL,0,NULL)){
+			ClearInfoBuff();
+			PostMessage(hwndMain,WM_ERROR,ERROR_THREAD_CREATE_FAILED,0);
+		}
+		break;
+		case WM_REBOOTED:
+		assert(stage == S_DOWNLOAD);
+		stage = S_REBOOTED;
+		/*display reboot success infomation*/
+		ShowInfo("Reboot success!\n");		
+		SendMessage(hwndMain,WM_CONNECTING,0,0);		
+		break;		
+		
+		case WM_CONNECTING:
+		assert(stage == S_REBOOTED);
+		stage = S_CONNECTING;
+		if(NULL == CreateThread(NULL,0,ConnectDevice,NULL,0,NULL)){
+			ClearInfoBuff();
+			PostMessage(hwndMain,WM_ERROR,ERROR_THREAD_CREATE_FAILED,0);
+		}
+		break;
+		
+		case WM_CONNECTED:
+		stage = S_CONNECTED;
+		/*we need do some init work ,such as global variables,etc..*/
+		bb_num_rootfs=-1; /*rootfs's bad block number */
+		bb_num_userdata=-1; /*userdata's bad block number */
+		recover_bb_num=-1; /*bad block number that currently recovered */
+		if(wParam){	/*error occur and jump in */
+			/*enable scan button,disable others*/			
+			SendMessage(hwndMain,WM_CTLENABLE,1<<4,0);
+		}
+		else{	/*normally step in*/
+			ShowInfo("Connect target success.\n");
+			PostMessage(hwndMain,WM_SCANING,0,0);
+		}
+		
+		break;
+		case WM_SCANING:
+		assert(stage == S_CONNECTED);
+		stage = S_SCANING;
+		SendMessage(hwndMain,WM_CTLENABLE,0,0);	
+		if(NULL == CreateThread(NULL,0,ScanDevice,NULL,0,NULL)){
+			ClearInfoBuff();
+			PostMessage(hwndMain,WM_ERROR,ERROR_THREAD_CREATE_FAILED,0);
+		}
+		break;
+		case WM_SCANED:
+		stage = S_SCANED;
+		/*restore some global variables*/
+		rootfs_recovered=0;	/*stand for rootfs option is recovered? */
+		userdata_recovered=0;	/*stand for userdata option is recovered? */
+		
+		/*enable recover button and rootfs,userdata partition,disable scan button*/
+		SendMessage(hwndMain,WM_CTLENABLE,(1<<1)|(1<<2)|(1<<5),0);		
+		break;
+		
+		case WM_RECOVERING:
+		assert(stage == S_SCANED);
+		stage = S_RECOVERING;
+		SendMessage(hwndMain,WM_CTLENABLE,0,0);
+		if(NULL == CreateThread(NULL,0,RecoverDevice,NULL,0,NULL)){
+			ClearInfoBuff();
+			PostMessage(hwndMain,WM_ERROR,ERROR_THREAD_CREATE_FAILED,0);
+		}
+		break;
+		
+		case WM_RECOVERED:
+		assert(stage == S_RECOVERING);
+		stage = S_RECOVERED;
+		/*give users a pop message and then reboot target*/
+		POP_MESSAGE(hwndMain,"Recover complete!target will be rebooted.","Notice");
+		memset(command, 0, sizeof(struct Network_command));
+        command->command_id=COMMAND_REBOOT;                
+        int retval=windows_send_command(command);
+		if(retval < 0)					
+			ERROR_MESSAGE(hwndMain,"Reboot failed! error code is %s\nYou need reboot your device manually.",errcode2_string(retval));
+		/*jump to S_INIT*/
+		PostMessage(hwndMain,WM_INIT,1,0);
+		break;
+		
+		case WM_ERROR:
+		switch(stage){			
+			case S_REBOOTING:			
+			AppendInfo("Technical information: %s\n",errcode2_string(wParam));
+			ERROR_MESSAGE(hwndMain,"Reboot failed! please check your device if's connect correctly.\n");
+			ClearInfoBuff();
+			/*jump to S_INIT*/
+			PostMessage(hwndMain,WM_INIT,1,0);
+			break;
+			case S_DOWNLOAD:			
+			case S_CONNECTING:			
+			AppendInfo("Technical information: %s\n",errcode2_string(wParam));
+			AppendInfo("Follow these steps to retry:\n");
+			AppendInfo("Step1: Reboot your device by pull battary off.\n");
+			AppendInfo("Step2: Wait a second,upload your battary again.\n");
+			AppendInfo("Step3: Wait about 10 seconds for device loading system.\n");
+			AppendInfo("Step4: Close this window,and open it again.\n");
+			AppendInfo("Step5: Click \"Scan\" button to retry.\n");
+			AppendInfo("If this suitation happen again,you need technical support.\n");
+			/*Users don't care about download stage，make these two stage as one*/
+			ERROR_MESSAGE(hwndMain,"Connect target failed!\n");
+			ClearInfoBuff();
+			/*jump to S_INIT*/
+			PostMessage(hwndMain,WM_INIT,1,0);
+			break;			
+						
+			case S_SCANING:
+			AppendInfo("Technical information: %s\n",errcode2_string(wParam));
+			/*IsDeviceOffLine may block 25 seconds most,but return immediately if device removed,if connection not stable,
+			**it can be blocks long time,in this case,main window will sleep for x(max:25) seconds*/
+			if(IsDeviceOffLine()){	/*jump to S_INIT*/
+				ERROR_MESSAGE(hwndMain,"Can't detected target device! you need reboot your device manually and try it again.");
+				PostMessage(hwndMain,WM_INIT,1,0);
+			}
+			else{	/*jump to S_CONNECTED*/				
+				++scan_error_cnt;
+				if(scan_error_cnt <= 3){
+					ERROR_MESSAGE(hwndMain,"Scan failed! please retry.");					
+				}else if(IDOK == MessageBox(hwndMain,TEXT("Scan failed too many times! quit and try it again?"),TEXT("Error"),MB_ICONERROR | MB_OKCANCEL)){
+					/*reboot target*/
+					memset(command, 0, sizeof(struct Network_command));
+					command->command_id=COMMAND_REBOOT;                
+					int retval=windows_send_command(command);
+					if(retval < 0)					
+						ERROR_MESSAGE(hwndMain,"Reboot failed! error code is %s\nYou need reboot your device manually.",errcode2_string(retval));
+					PostMessage(hwndMain,WM_DESTROY,0,0);
+					break;
+				}
+				PostMessage(hwndMain,WM_CONNECTED,1,0);
+			}
+			ClearInfoBuff();			
+			break;
+			
+			case S_RECOVERING:
+			/*judge if's offline*/
+			AppendInfo("Technical information: %s\n",errcode2_string(wParam));
+			
+			if(IsDeviceOffLine()){	/*jump to S_INIT*/
+				ERROR_MESSAGE(hwndMain,"Can't detected target device! you need reboot your device manually and try it again.");
+				PostMessage(hwndMain,WM_INIT,1,0);
+			}
+			else{	/*jump to S_SCANED*/			
+				++recover_error_cnt;
+				if(recover_error_cnt <= 3){
+					ERROR_MESSAGE(hwndMain,"Recover failed! please retry.");					
+				}else if(IDOK == MessageBox(hwndMain,TEXT("Recover failed too many times! quit and try it again?"),TEXT("Error"),MB_ICONERROR | MB_OKCANCEL)){
+					/*reboot target*/
+					memset(command, 0, sizeof(struct Network_command));
+					command->command_id=COMMAND_REBOOT;                
+					int retval=windows_send_command(command);
+					if(retval < 0)					
+						ERROR_MESSAGE(hwndMain,"Reboot failed! error code is %s\nYou need reboot your device manually.",errcode2_string(retval));
+					PostMessage(hwndMain,WM_DESTROY,0,0);
+					break;
+				}
+				PostMessage(hwndMain,WM_SCANED,1,0);				
+			}
+			ClearInfoBuff();
+			break;
+			default:
+				ERROR_MESSAGE(hwndMain,"%s:%s%d:Unkown error",__FILE__,__func__,__LINE__);
+			break;
+		}		
+		break;
+		
+		/*enable/disable user contoller */
+		case WM_CTLENABLE:
+		if(wParam&(1<<1))	/*enable rootfs*/
+			EnableWindow(controllerLayout[1].hwnd,1);
+		else	/*disable rootfs*/
+			EnableWindow(controllerLayout[1].hwnd,0);
+		if(wParam&(1<<2))	/*enable userdata*/
+			EnableWindow(controllerLayout[2].hwnd,1);
+		else	/*disable userdata*/
+			EnableWindow(controllerLayout[2].hwnd,0);
+		if(wParam&(1<<4))	/*enable scan button*/
+			EnableWindow(controllerLayout[4].hwnd,1);
+		else	/*disable scan button*/
+			EnableWindow(controllerLayout[4].hwnd,0);
+		if(wParam&(1<<5))	/*enable recover button*/
+			EnableWindow(controllerLayout[5].hwnd,1);
+		else	/*disable recover button*/
+			EnableWindow(controllerLayout[5].hwnd,0);		
+		break; 
+		
+		default:
+		break;
+	}
+	return DefWindowProc(hwnd,message,wParam,lParam);
+}
+
 
 //main window entry
 int APIENTRY WinMain(HINSTANCE hInstance,HINSTANCE hPrevInstance,
@@ -514,449 +974,5 @@ int APIENTRY WinMain(HINSTANCE hInstance,HINSTANCE hPrevInstance,
     return msg.wParam;
 }
 
-DWORD WINAPI RebootTarget(LPVOID lpParameter)
-{
-	char  j, retval;
-	
-	SendMessage(hwndMain,WM_CTLENABLE,0,0);
-	/*clear information */
-	ShowInfo("\0");
-    /*Initialize net */   
-    WSADATA wsaData;
-    retval = WSAStartup(MAKEWORD(1, 1), &wsaData);
-    if (retval != 0)
-    {
-	  ShowInfo("%s_%d: WSAStartup() error, error code is %d\n", __FILE__, __LINE__, WSAGetLastError());
-      /*if WSAStartup failed, exit directly*/
-	  MessageBox(hwndMain,TEXT("System incompatible!"),TEXT("ERROR"),MB_ICONERROR);
-	  exit(-1);
-    }
-    
-	ShowInfo("Rebooting device..\n");	
-    /*Try 3 times...*/
-    for (j = 0;j < 3;j++)
-    {
-        retval = file_download(REBOOT_SHELL, "/tmp/reset_tg.sh");        
-        if( 0 == retval ) 
-        {
-            WINDOWS_DEBUG("Download %s success.\n", REBOOT_SHELL);
-            retval = exec_file_in_tg("/tmp/reset_tg.sh");
-            if( 0 == retval )
-            {
-              WINDOWS_DEBUG("Exec %s success!\n", REBOOT_SHELL);
-              break;
-            }
-        }
-    }
-
-END:
-    WSACleanup();
-EXIT:
-	if(retval != 0){/*FAILED*/
-		ClearInfo();
-		PostMessage(hwndMain,WM_ERROR,retval,0);
-	}
-	else{/*SUCCESS*/		
-		PostMessage(hwndMain,WM_DOWNLOAD,0,0);
-	}
-    return  (DWORD)retval;
-}
-
-DWORD WINAPI DownloadTool(LPVOID lpParameter)
-{	
-	char  j, retval;    
-	Sleep(10000);	/*wait for target reboot complete*/
-	ClearInfo(); /*clear information buff*/
-    //Initialize net
-    WSADATA wsaData;
-    retval = WSAStartup(MAKEWORD(1, 1), &wsaData);
-    if (retval != 0)
-    {
-      ShowInfo("%s_%d: WSAStartup() error, error code is %d\n",
-	  __FILE__, __LINE__, WSAGetLastError());
-      goto EXIT;
-    }    
-
-    /*Try 3 times...*/
-    for (j = 0;j < 3;j++)
-    {
-        retval = file_download(BB_RECOVER_TOOL, "/tmp/linux_bb_recover" );
-        
-        if( 0 == retval ) 
-        {
-            Sleep(50);
-			#ifdef WINDOWS_DEBUG_ENABLE
-            AppendInfo("Download %s success\n", BB_RECOVER_TOOL);
-			#endif
-            retval = exec_file_in_tg("/tmp/linux_bb_recover");
-            if( 0 == retval )
-            {
-			#ifdef WINDOWS_DEBUG_ENABLE
-              AppendInfo("Exec %s success!\n", BB_RECOVER_TOOL);
-			#endif
-              break;
-            }
-        }
-    }
-END:
-    WSACleanup();
-EXIT:
-	if(retval != 0){/*FAILED*/
-		PostMessage(hwndMain,WM_ERROR,retval,0);
-	}
-	else{/*SUCCESS*/		
-		PostMessage(hwndMain,WM_REBOOTED,0,0);
-	}
-    return  (DWORD)retval;
-}
-
-DWORD WINAPI ConnectDevice(LPVOID lpParameter)
-{
-	int j,retval=0;
-	
-	Sleep(500);	/*let reboot success information stay a little*/
-	ShowInfo("Connecting target..\n");
-	Sleep(1500);
-	/*try 3 times*/
-	for(j = 0; j < 3 ;++j){
-		retval=network_try2_connect(TARGET_IP, NET_PORT);
-		if(retval >= 0){		
-			ShowInfo("Connect target success!\n");
-			retval = 0;
-			break;
-		}					
-	}
-EXIT:
-	if(retval != 0){/*FAILED*/
-		ClearInfo();
-		PostMessage(hwndMain,WM_ERROR,retval,0);
-	}
-	else{/*SUCCESS*/		
-		PostMessage(hwndMain,WM_CONNECTED,0,0);
-	}
-    return  (DWORD)retval;
-}
-//callback function for main window
-LRESULT CALLBACK WndProc(HWND hwnd,UINT message,WPARAM wParam,LPARAM lParam)
-{
-	PAINTSTRUCT ps;
-	HDC hdc;
-	static int scan_error_cnt = 0;	/*device online but scan failed times */
-	static int recover_error_cnt = 0;	/*device online but recover failed times*/
-	switch(message){
-		case WM_CREATE:
-		/*create the controller */
-		{
-			int i;
-			for(i = 0; i < CONTROLLER_NUM; ++i){
-				controllerLayout[i].hwnd = CreateWindow (controllerLayout[i].lpszType,controllerLayout[i].lpszString,
-                         controllerLayout[i].dwStyle,controllerLayout[i].x,controllerLayout[i].y,
-						 controllerLayout[i].nWidth,controllerLayout[i].nHeight,
-                         hwnd, (HMENU)i,
-                         hInst, NULL);
-				if( NULL == controllerLayout[i].hwnd){
-					MessageBox(NULL,"Controller create error","Error",MB_ICONERROR);
-					exit(-1);
-				}
-			}
-			hInfo = controllerLayout[6].hwnd;
-		}
-		command= (struct Network_command *)malloc(sizeof(struct Network_command));
-		if(command == NULL){
-			MessageBox(NULL,"Memery alloc failed!","Error",MB_ICONERROR);
-			exit(-1);
-		}
-		
-		break;
-		case WM_COMMAND:
-		{
-			WORD childId = LOWORD(wParam);
-			WORD notify = HIWORD(wParam);
-			WINDOWS_DEBUG("childId = %d\nnotify = %d\n",childId,notify);			
-			if(notify == BN_CLICKED){				
-				switch(childId){
-					//rootfs checked
-					case 1:rootfs_checked = rootfs_checked == 1 ? 0 : 1;
-					SendMessage(controllerLayout[1].hwnd,BM_SETCHECK,rootfs_checked,0);
-					break;
-					//userdata checked
-					case 2:userdata_checked = userdata_checked == 1 ? 0 : 1;
-					SendMessage(controllerLayout[2].hwnd,BM_SETCHECK,userdata_checked,0);
-					break;
-					//scan button click
-					case 4:
-					assert(stage == S_INIT || stage == S_CONNECTED);
-					if(stage == S_INIT){
-						if(IDOK == MessageBox(hwndMain,TEXT("This operation will reboot your device,Are you sure want to do this?"),\
-							TEXT("Notice"),MB_OKCANCEL)){
-							PostMessage(hwndMain,WM_REBOOTING,0,0);
-						}
-					}else if(stage == S_CONNECTED){
-						PostMessage(hwndMain,WM_SCANING,0,0);
-					}else{
-						ERROR_MESSAGE(hwndMain,"%s:%s:%d:error ocurr!",__FILE__,__func__,__LINE__);
-					}						
-					break;
-					//recover button click
-					case 5:			
-					PostMessage(hwndMain,WM_RECOVERING,0,0);	
-					break;
-					default:					
-					WINDOWS_DEBUG("Unhandled Message:%s:%d",__func__,__LINE__);					
-					break;
-				}
-			}
-			WINDOWS_DEBUG("rootfs = %d\nuserdata = %d\n",rootfs_checked,userdata_checked);
-						
-		}				
-		break;
-		case WM_CLOSE:		
-		if(stage == S_INIT)
-			break;
-		else if(stage == S_CONNECTED || stage == S_SCANED){			
-			if(IDYES == MessageBox(hwndMain,TEXT("Are you sure you want quit now?"),TEXT("Notice"),MB_YESNO)){
-				/*reboot the target */
-				memset(command, 0, sizeof(struct Network_command));
-                command->command_id=COMMAND_REBOOT;                
-                int retval=windows_send_command(command);
-				if(retval < 0)					
-					ERROR_MESSAGE(hwndMain,"Reboot failed! error code is %s\nYou need reboot your device manually.",errcode2_string(retval));
-				break;
-			}
-			else
-				return 0;	/*ignore this close message*/
-		}		
-		else	/*forbid to close window in other case */
-			return 0;
-		
-		case WM_DESTROY:
-		free(command);
-		//Close socket
-		closesocket(g_socket_to_server);  
-		//terminated DLL  
-		WSACleanup();
-		CloseHandle(hMutex);
-		PostQuitMessage(0);
-		break;
-		case WM_PAINT:
-		hdc = BeginPaint(hwnd,&ps);		
-		EndPaint(hwnd,&ps);
-		break;
-		
-		case WM_INIT:				
-			if(0 == wParam){/*normally entry S_INIT*/
-#warning "do we need tips here?"			
-				ShowInfo("\0");
-			}
-			else{/*jump in S_INIT*/
-				/*restore scan_error_cnt and recover_error_cnt */
-				scan_error_cnt = 0;
-				recover_error_cnt = 0;
-				ClearInfo();							
-			}			
-			/*make rootfs and userdata checked*/
-			rootfs_checked = 0;
-			userdata_checked = 0;
-			SendMessage(hwndMain,WM_COMMAND,MAKEWPARAM(1,BN_CLICKED),0);/*check rootfs */
-			SendMessage(hwndMain,WM_COMMAND,MAKEWPARAM(2,BN_CLICKED),0);/*check userdata */
-			/*disable rootfs ,userdata and recover,enable scan*/
-			SendMessage(hwndMain,WM_CTLENABLE,1<<4,0);			
-			stage = S_INIT;				
-		break;
-		
-		case WM_REBOOTING:		
-		assert(stage == S_INIT);
-		stage = S_REBOOTING;
-		ClearInfo();
-		if(NULL == CreateThread(NULL,0,RebootTarget,NULL,0,NULL))
-			PostMessage(hwndMain,WM_ERROR,ERROR_THREAD_CREATE_FAILED,0);
-		break;
-		
-		case WM_DOWNLOAD:
-		assert(stage == S_REBOOTING);
-		stage = S_DOWNLOAD;
-		/*download recover tool to target*/
-		if(NULL == CreateThread(NULL,0,DownloadTool,NULL,0,NULL))
-			PostMessage(hwndMain,WM_ERROR,ERROR_THREAD_CREATE_FAILED,0);
-		break;
-		case WM_REBOOTED:
-		assert(stage == S_DOWNLOAD);
-		stage = S_REBOOTED;
-		/*display reboot success infomation*/
-		ShowInfo("Reboot success!\n");		
-		PostMessage(hwndMain,WM_CONNECTING,0,0);		
-		break;		
-		
-		case WM_CONNECTING:
-		assert(stage == S_REBOOTED);
-		stage = S_CONNECTING;
-		if(NULL == CreateThread(NULL,0,ConnectDevice,NULL,0,NULL))
-			PostMessage(hwndMain,WM_ERROR,ERROR_THREAD_CREATE_FAILED,0);
-		break;
-		
-		case WM_CONNECTED:
-		stage = S_CONNECTED;
-		/*we need do some init work ,such as global variables,etc..*/
-		bb_num_rootfs=-1; /*rootfs's bad block number */
-		bb_num_userdata=-1; /*userdata's bad block number */
-		recover_bb_num=-1; /*bad block number that currently recovered */
-		if(wParam){	/*error occur and jump in */
-			/*enable scan button,disable others*/
-			ClearInfo();
-			SendMessage(hwndMain,WM_CTLENABLE,1<<4,0);
-		}
-		else{	/*normally step in*/
-			ShowInfo("Connect target success.\n");
-			PostMessage(hwndMain,WM_SCANING,0,0);
-		}
-		
-		break;
-		case WM_SCANING:
-		assert(stage == S_CONNECTED);
-		stage = S_SCANING;
-		if(NULL == CreateThread(NULL,0,ScanDevice,NULL,0,NULL))
-			PostMessage(hwndMain,WM_ERROR,ERROR_THREAD_CREATE_FAILED,0);
-		break;
-		case WM_SCANED:
-		stage = S_SCANED;
-		/*restore some global variables*/
-		rootfs_recovered=0;	/*stand for rootfs option is recovered? */
-		userdata_recovered=0;	/*stand for userdata option is recovered? */
-		
-		ClearInfo();
-		/*enable recover button and rootfs,userdata partition,disable scan button*/
-		SendMessage(hwndMain,WM_CTLENABLE,(1<<1)|(1<<2)|(1<<5),0);		
-		break;
-		
-		case WM_RECOVERING:
-		assert(stage == S_SCANED);
-		stage = S_RECOVERING;
-		if(NULL == CreateThread(NULL,0,RecoverDevice,NULL,0,NULL))
-			PostMessage(hwndMain,WM_ERROR,ERROR_THREAD_CREATE_FAILED,0);
-		break;
-		#warning "not complete"
-		case WM_RECOVERED:
-		assert(stage == S_RECOVERING);
-		stage = S_RECOVERED;
-		/*give users a pop message and then reboot target*/
-		POP_MESSAGE(hwndMain,"Recover complete!target will be rebooted.","Notice");
-		memset(command, 0, sizeof(struct Network_command));
-        command->command_id=COMMAND_REBOOT;                
-        int retval=windows_send_command(command);
-		if(retval < 0)					
-			ERROR_MESSAGE(hwndMain,"Reboot failed! error code is %s\nYou need reboot your device manually.",errcode2_string(retval));
-		break;
-		/*jump to S_INIT*/
-		PostMessage(hwndMain,WM_INIT,1,0);
-		break;
-		
-		case WM_ERROR:
-		switch(stage){			
-			case S_REBOOTING:			
-			AppendInfo("Technical information: %s\n",errcode2_string(wParam));
-			ERROR_MESSAGE(hwndMain,"Reboot failed! please check your device if's connect correctly.\n");
-			ClearInfo();
-			/*jump to S_INIT*/
-			PostMessage(hwndMain,WM_INIT,1,0);
-			break;
-			case S_DOWNLOAD:			
-			case S_CONNECTING:			
-			AppendInfo("Technical information: %s\n",errcode2_string(wParam));
-			AppendInfo("Follow these steps to retry:\n");
-			AppendInfo("Step1: Reboot your device by pull battary off.\n");
-			AppendInfo("Step2: Wait a second,upload your battary again.\n");
-			AppendInfo("Step3: Wait about 10 seconds for device loading system.\n");
-			AppendInfo("Step4: Close this window,and open it again.\n");
-			AppendInfo("Step5: Click \"Scan\" button to retry.\n");
-			AppendInfo("If this suitation happen again,you need technical support.\n");
-			/*Users don't care about download stage，make these two stage as one*/
-			ERROR_MESSAGE(hwndMain,"Connect target failed!\n");
-			ClearInfo();
-			/*jump to S_INIT*/
-			PostMessage(hwndMain,WM_INIT,1,0);
-			break;			
-						
-			case S_SCANING:
-			AppendInfo("Technical information: %s\n",errcode2_string(wParam));
-			if(IsDeviceOffLine()){	/*jump to S_INIT*/
-				ERROR_MESSAGE(hwndMain,"Can't detected target device! you need reboot your device manually and try it again.");
-				PostMessage(hwndMain,WM_INIT,1,0);
-			}
-			else{	/*jump to S_CONNECTED*/				
-				++scan_error_cnt;
-				if(scan_error_cnt <= 3){
-					ERROR_MESSAGE(hwndMain,"Scan failed! please retry.");					
-				}else if(IDOK == MessageBox(hwndMain,TEXT("Scan failed too many times! quit and try it again?"),TEXT("Error"),MB_ICONERROR | MB_OKCANCEL)){
-					/*reboot target*/
-					memset(command, 0, sizeof(struct Network_command));
-					command->command_id=COMMAND_REBOOT;                
-					int retval=windows_send_command(command);
-					if(retval < 0)					
-						ERROR_MESSAGE(hwndMain,"Reboot failed! error code is %s\nYou need reboot your device manually.",errcode2_string(retval));
-					PostMessage(hwndMain,WM_DESTROY,0,0);
-					break;
-				}
-				PostMessage(hwndMain,WM_CONNECTED,1,0);
-			}
-			ClearInfo();			
-			break;
-			
-			case S_RECOVERING:
-			/*judge if's offline*/
-			AppendInfo("Technical information: %s\n",errcode2_string(wParam));
-			#warning "IsDeviceOffLine() will block or not?"
-			if(IsDeviceOffLine()){	/*jump to S_INIT*/
-				ERROR_MESSAGE(hwndMain,"Can't detected target device! you need reboot your device manually and try it again.");
-				PostMessage(hwndMain,WM_INIT,1,0);
-			}
-			else{	/*jump to S_SCANED*/			
-				++recover_error_cnt;
-				if(recover_error_cnt <= 3){
-					ERROR_MESSAGE(hwndMain,"Recover failed! please retry.");					
-				}else if(IDOK == MessageBox(hwndMain,TEXT("Recover failed too many times! quit and try it again?"),TEXT("Error"),MB_ICONERROR | MB_OKCANCEL)){
-					/*reboot target*/
-					memset(command, 0, sizeof(struct Network_command));
-					command->command_id=COMMAND_REBOOT;                
-					int retval=windows_send_command(command);
-					if(retval < 0)					
-						ERROR_MESSAGE(hwndMain,"Reboot failed! error code is %s\nYou need reboot your device manually.",errcode2_string(retval));
-					PostMessage(hwndMain,WM_DESTROY,0,0);
-					break;
-				}
-				PostMessage(hwndMain,WM_SCANED,1,0);				
-			}
-			ClearInfo();
-			break;
-			default:
-				ERROR_MESSAGE(hwndMain,"%s:%s%d:Unkown error",__FILE__,__func__,__LINE__);
-			break;
-		}		
-		break;
-		
-		/*enable/disable specified contoller */
-		case WM_CTLENABLE:
-		if(wParam&(1<<1))	/*enable rootfs*/
-			EnableWindow(controllerLayout[1].hwnd,1);
-		else	/*disable rootfs*/
-			EnableWindow(controllerLayout[1].hwnd,0);
-		if(wParam&(1<<2))	/*enable userdata*/
-			EnableWindow(controllerLayout[2].hwnd,1);
-		else	/*disable userdata*/
-			EnableWindow(controllerLayout[2].hwnd,0);
-		if(wParam&(1<<4))	/*enable scan button*/
-			EnableWindow(controllerLayout[4].hwnd,1);
-		else	/*disable scan button*/
-			EnableWindow(controllerLayout[4].hwnd,0);
-		if(wParam&(1<<5))	/*enable recover button*/
-			EnableWindow(controllerLayout[5].hwnd,1);
-		else	/*disable recover button*/
-			EnableWindow(controllerLayout[5].hwnd,0);		
-		break; 
-		
-		default:
-		break;
-	}
-	return DefWindowProc(hwnd,message,wParam,lParam);
-}
 
 
