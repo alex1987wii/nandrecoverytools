@@ -25,7 +25,7 @@
 #define MAX_STRING				1024
 
 
-//#define WINDOWS_DEBUG_ENABLE                                     
+#define WINDOWS_DEBUG_ENABLE                                     
 
 #ifdef WINDOWS_DEBUG_ENABLE	 
     #define WINDOWS_DEBUG(fmt, args...)  ({snprintf(MessageBoxBuff,MAX_STRING,TEXT(fmt),##args);MessageBox(NULL,MessageBoxBuff,TEXT("Debug"),MB_OK);})   
@@ -373,7 +373,7 @@ DWORD WINAPI ScanDevice(LPVOID lpParameter)
 		}
 		if(command->command_id == CHECK_BB_ROOT_PATITION_ACK && retval >0){
 			bb_num_rootfs = command->data;
-            ShowInfo("ROOTFS partition bad block number: %u\n", bb_num_rootfs);
+            ShowInfo("ROOTFS: %u bad block(s).\n", bb_num_rootfs);
 			retval = 0;
 		}
 		else{
@@ -406,7 +406,7 @@ DWORD WINAPI ScanDevice(LPVOID lpParameter)
 		}
 		if(command->command_id == CHECK_BB_USER_PATITON_ACK && retval >0){
 			bb_num_userdata = command->data;
-			snprintf(lpszInformation+InfoPos,MAX_STRING-InfoPos,TEXT("USERDATA partition bad block number: %u\n"),bb_num_userdata);
+			snprintf(lpszInformation+InfoPos,MAX_STRING-InfoPos,TEXT("USERDATA: %u bad block(s).\n"),bb_num_userdata);
 			SetWindowText(hInfo,lpszInformation);
 			retval = 0;
 		}
@@ -459,9 +459,9 @@ rootfs:
 	if(rootfs_checked == 1){		
 		if(bb_num_rootfs <= 20){
 			if(bb_num_rootfs == 0)
-				AppendInfo("There's no bad block in ROOTFS partition.\n");
+				AppendInfo("ROOTFS: No bad block!\n");
 			else
-				AppendInfo("There's only %u bad block(s) in ROOTFS partition, it's NOT necessary to recover it.\n", 
+				AppendInfo("ROOTFS: There's only %u bad block(s), it's NOT necessary to recover it!\n", 
                             bb_num_rootfs);			
 			goto userdata;
 		}
@@ -481,7 +481,7 @@ rootfs:
             recover_bb_num=(unsigned int)command->data;
 			/*truncate the processing information */
 			lpszInformation[pos] = TEXT('\0');
-            AppendInfo("Recovered ROOTFS bad block: %u, processing: %2.2f%%\n", 
+            AppendInfo("ROOTFS: Recovered bad block(s): %u, processing: %2.2f%%\n", 
             recover_bb_num, ( (float)recover_bb_num / (float)bb_num_rootfs ) *100);
 			
 		}while(command->command_id != RECOVER_BB_FINISH_ACK && retval > 0);
@@ -489,10 +489,10 @@ rootfs:
         {
             /*All the Bad Blocks are recovered*/
             if(recover_bb_num%bb_num_rootfs==0)
-                ShowInfo("Recover ROOTFS partition success!\n");
+                ShowInfo("ROOTFS: Recovered %u bad block(s)!\n",recover_bb_num);
             else /*Leave some TURE Bad Block(s), that is not recoverable*/
-                ShowInfo("Recover ROOTFS partition success, remain %d TURE Bad Block(s).\n", 
-                    bb_num_rootfs -recover_bb_num);
+                ShowInfo("ROOTFS: Recovered %u bad block(s), remain %d TURE Bad Block(s)!\n", 
+                    recover_bb_num, bb_num_rootfs -recover_bb_num);
 			rootfs_recovered = 1;
 			retval = 0;
         }
@@ -512,9 +512,9 @@ userdata:
 	if(userdata_checked == 1){			
 		if(bb_num_userdata <= 30){
 			if(bb_num_userdata == 0)
-				AppendInfo("There's no bad block in USERDATA partition.\n");
+				AppendInfo("USERDATA: No bad block!\n");
 			else
-				AppendInfo("There's only %d bad block(s) in USERDATA partition, it's NOT necessary to recover it.\n", 
+				AppendInfo("USERDATA: There's only %d bad block(s), it's NOT necessary to recover it！\n", 
 				bb_num_userdata);
 			goto EXIT;
 		}
@@ -534,7 +534,7 @@ userdata:
             recover_bb_num=(unsigned int)command->data;
 			/*truncate the processing information */
 			lpszInformation[pos] = TEXT('\0');
-            AppendInfo("Recovered USERDATA bad blocks: %u, processing: %2.2f%%\n", 
+            AppendInfo("USERDATA: Recovered bad block(s): %u, processing: %2.2f%%\n", 
                     recover_bb_num, ( (float)recover_bb_num / (float)bb_num_userdata ) *100);
 			
 		}while(command->command_id != RECOVER_BB_FINISH_ACK && retval > 0);
@@ -546,10 +546,10 @@ userdata:
 			lpszInformation[old_pos] = TEXT('\0');
             /*All the Bad Blocks are recovered*/
             if(recover_bb_num%bb_num_userdata==0)
-                AppendInfo("Recover USERDATA partition success!\n");
+                AppendInfo("USERDATA: Recovered %u bad block(s).\n",recover_bb_num);
             else /*Leave some TURE Bad Block(s), that is not recoverable*/
-                AppendInfo("Recover USERDATA partition success, remain %d TURE Bad Block(s).\n", 
-                        bb_num_userdata - recover_bb_num);
+                AppendInfo("USERDATA: Recovered %u bad block(s), remain %d TURE Bad Block(s)!\n", 
+                        recover_bb_num, bb_num_userdata - recover_bb_num);
 			userdata_recovered = 1;
 			retval = 0;
         }
@@ -687,7 +687,13 @@ LRESULT CALLBACK WndProc(HWND hwnd,UINT message,WPARAM wParam,LPARAM lParam)
 		
 		case WM_INIT:				
 			if(0 == wParam){/*normally entry S_INIT*/			
-				ShowInfo("\0");
+				ClearInfoBuff();
+				AppendInfo("Tips: \tIf error keep occurs when device connected correctly, do this procedure:\n");
+				AppendInfo("\tStep1: Reboot your device by pull battary off.\n");
+				AppendInfo("\tStep2: Wait a second,upload your battary again.\n");
+				AppendInfo("\tStep3: Wait about 10 seconds for device loading system.\n");
+				AppendInfo("\tStep4: Close this window,and then open it again.\n");
+				AppendInfo("\tStep5: Click \"Scan\" button to retry.\n");				
 			}
 			else{/*jump in S_INIT*/
 				/*restore scan_error_cnt and recover_error_cnt */
@@ -815,15 +821,8 @@ LRESULT CALLBACK WndProc(HWND hwnd,UINT message,WPARAM wParam,LPARAM lParam)
 			case S_DOWNLOAD:			
 			case S_CONNECTING:			
 			AppendInfo("Technical information: %s\n",errcode2_string(wParam));
-			AppendInfo("Follow these steps to retry:\n");
-			AppendInfo("Step1: Reboot your device by pull battary off.\n");
-			AppendInfo("Step2: Wait a second,upload your battary again.\n");
-			AppendInfo("Step3: Wait about 10 seconds for device loading system.\n");
-			AppendInfo("Step4: Close this window,and then open it again.\n");
-			AppendInfo("Step5: Click \"Scan\" button to retry.\n");
-			AppendInfo("If this suitation happen again,you need technical support.\n");
 			/*Users don't care about download stage，make these two stage as one*/
-			ERROR_MESSAGE(hwndMain,"Connect target failed!\n");
+			ERROR_MESSAGE(hwndMain,"Connect target failed! please push \"Scan\" button to retry.\n");
 			ClearInfoBuff();
 			/*jump to S_INIT*/
 			PostMessage(hwndMain,WM_INIT,1,0);
@@ -834,14 +833,14 @@ LRESULT CALLBACK WndProc(HWND hwnd,UINT message,WPARAM wParam,LPARAM lParam)
 			/*IsDeviceOffLine may block 25 seconds most,but return immediately if device removed,if connection not stable,
 			**it can be blocks long time,in this case,main window will sleep for x(max:25) seconds*/
 			if(wParam == ERROR_DEVICE_OFFLINE || IsDeviceOffLine()){	/*jump to S_INIT*/
-				ERROR_MESSAGE(hwndMain,"Can't detected target device! you need reboot your device manually and try it again.");
+				ERROR_MESSAGE(hwndMain,"Can't detected target device! please check your device if's connect correctly, and push \"Scan\" button to start it over.");
 				PostMessage(hwndMain,WM_INIT,1,0);
 			}
 			else{	/*jump to S_CONNECTED*/				
 				++scan_error_cnt;
 				if(scan_error_cnt <= 3){
 					ERROR_MESSAGE(hwndMain,"Scan failed! please retry.");					
-				}else if(IDOK == MessageBox(hwndMain,TEXT("Scan failed too many times! quit and try it again?"),TEXT("Error"),MB_ICONERROR | MB_OKCANCEL)){
+				}else if(IDOK == MessageBox(hwndMain,TEXT("Scan failed too many times! quit?"),TEXT("Error"),MB_ICONERROR | MB_OKCANCEL)){
 					/*reboot target*/
 					memset(command, 0, sizeof(struct Network_command));
 					command->command_id=COMMAND_REBOOT;                
@@ -861,14 +860,14 @@ LRESULT CALLBACK WndProc(HWND hwnd,UINT message,WPARAM wParam,LPARAM lParam)
 			AppendInfo("Technical information: %s\n",errcode2_string(wParam));
 			
 			if(wParam == ERROR_DEVICE_OFFLINE || IsDeviceOffLine()){	/*jump to S_INIT*/
-				ERROR_MESSAGE(hwndMain,"Can't detected target device! you need reboot your device manually and try it again.");
+				ERROR_MESSAGE(hwndMain,"Can't detected target device! please check your device if's connect correctly, and push \"Scan\" button to start it over.");
 				PostMessage(hwndMain,WM_INIT,1,0);
 			}
 			else{	/*jump to S_SCANED*/			
 				++recover_error_cnt;
 				if(recover_error_cnt <= 3){
 					ERROR_MESSAGE(hwndMain,"Recover failed! please retry.");					
-				}else if(IDOK == MessageBox(hwndMain,TEXT("Recover failed too many times! quit and try it again?"),TEXT("Error"),MB_ICONERROR | MB_OKCANCEL)){
+				}else if(IDOK == MessageBox(hwndMain,TEXT("Recover failed too many times! quit?"),TEXT("Error"),MB_ICONERROR | MB_OKCANCEL)){
 					/*reboot target*/
 					memset(command, 0, sizeof(struct Network_command));
 					command->command_id=COMMAND_REBOOT;                
